@@ -286,7 +286,7 @@ export function GeneratedFileCards({
         if (mime.startsWith("audio/") && mediaSrc) {
           return (
             <div key={key} className="w-full max-w-[min(520px,90%)]">
-              <VoiceBanner src={mediaSrc} label={t("Voice reply")} />
+              <VoiceBanner src={mediaSrc} label="语音回复" />
             </div>
           );
         }
@@ -734,7 +734,12 @@ function VoiceBanner({
   };
 
   return (
-    <div className="flex items-center gap-2 rounded-full border border-[var(--border)] bg-[var(--card)] px-3 py-1.5 shadow-sm">
+    <div
+      className="flex items-center gap-2 rounded-full border border-[var(--border)] bg-[var(--card)] px-3 py-1.5 shadow-sm"
+      // [local patch 2026-09-02] 横幅宽度随秒数伸缩（微信语音条风格）：
+      // 短语音窄条、长语音宽条，上限 420px；按钮永远 shrink-0 不会被挤出。
+      style={{ width: `clamp(170px, ${150 + (seconds ?? 5) * 14}px, 420px)` }}
+    >
       <button
         type="button"
         onClick={toggle}
@@ -755,12 +760,9 @@ function VoiceBanner({
       <span className="shrink-0 text-[11px] font-medium text-[var(--muted-foreground)]">
         {seconds === null ? "" : `${seconds}s`}
       </span>
-      <span className="shrink-0 text-[12.5px] font-medium text-[var(--foreground)]">{label}</span>
-      {transcript && (
-        <span className="min-w-0 flex-1 truncate text-[12px] text-[var(--muted-foreground)]" title={transcript}>
-          {transcript}
-        </span>
-      )}
+      <span className="min-w-0 flex-1 truncate text-[12px] text-[var(--foreground)]" title={transcript || label}>
+        {transcript || label}
+      </span>
       {transcript && onCopy && (
         <button
           type="button"
@@ -1373,7 +1375,7 @@ export const UserMessage = memo(function UserMessage({
                 : null
             }
             transcript={voiceTranscript}
-            label={t("Voice message")}
+            label="语音消息"
             onCopy={onCopy}
           />
         ) : (
