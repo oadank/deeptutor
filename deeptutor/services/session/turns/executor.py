@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import uuid
 from collections.abc import Callable
 import contextlib
 from contextvars import Token
@@ -839,6 +840,54 @@ class TurnExecutor:
             # rounds (their text stayed in the trace, never the answer).
             assistant_content = _persisted_answer()
 
+            # [local patch 2026-09-02] 语音铁律（dsh 同款）：用户语音消息的 turn，
+            # assistant 回复自动 TTS 成语音 artifact 挂到消息上——不依赖模型自觉
+            # 调工具（实测模型会口头应答却不调用）。失败只记日志不阻塞回复。
+            voice_reply_attachments: list[dict[str, Any]] = []
+            if (
+                str(payload.get("content") or "").startswith("[用户发送了一条语音")
+                and assistant_content.strip()
+            ):
+                try:
+                    from deeptutor.services.sandbox.artifacts import (
+                        collect_public_artifacts,
+                    )
+                    from deeptutor.services.voice import synthesize_speech
+
+                    audio_bytes, audio_content_type = await synthesize_speech(
+                        assistant_content
+                    )
+                    ext = "mp3" if "mpeg" in (audio_content_type or "") else "wav"
+                    from deeptutor.services.path_service import get_path_service
+
+                    media_dir = (
+                        get_path_service().get_task_workspace("chat", "media_gen")
+                        / "tts"
+                    )
+                    media_dir.mkdir(parents=True, exist_ok=True)
+                    voice_filename = f"voice-reply-{uuid.uuid4().hex[:12]}.{ext}"
+                    (media_dir / voice_filename).write_bytes(audio_bytes)
+                    voice_reply_attachments = [
+                        {
+                            "type": "audio",
+                            "filename": artifact.filename,
+                            "url": artifact.url,
+                            "mime_type": artifact.mime_type,
+                            "size_bytes": artifact.size_bytes,
+                        }
+                        for artifact in collect_public_artifacts(str(media_dir))
+                        if artifact.filename == voice_filename
+                    ]
+                    logger.info(
+                        "voice-reply auto-TTS ok: %s (%d bytes)",
+                        voice_filename,
+                        len(audio_bytes),
+                    )
+                except Exception:
+                    logger.warning(
+                        "voice-reply auto-TTS failed", exc_info=True
+                    )
+
             # Assistant continues the same branch as the user message it
             # answers. If we just persisted a new user row we chain off
             # that; if we did not (regenerate path) and the caller pinned a
@@ -851,7 +900,7 @@ class TurnExecutor:
                     content=assistant_content,
                     capability=capability_name,
                     events=assistant_events,
-                    attachments=generated_attachments or None,
+                    attachments=(generated_attachments or []) + voice_reply_attachments or None,
                     parent_message_id=new_user_message_id,
                     metadata=assistant_provider_metadata,
                 )
@@ -862,7 +911,7 @@ class TurnExecutor:
                     content=assistant_content,
                     capability=capability_name,
                     events=assistant_events,
-                    attachments=generated_attachments or None,
+                    attachments=(generated_attachments or []) + voice_reply_attachments or None,
                     parent_message_id=branch_parent_id,
                     metadata=assistant_provider_metadata,
                 )
@@ -873,7 +922,7 @@ class TurnExecutor:
                     content=assistant_content,
                     capability=capability_name,
                     events=assistant_events,
-                    attachments=generated_attachments or None,
+                    attachments=(generated_attachments or []) + voice_reply_attachments or None,
                     metadata=assistant_provider_metadata,
                 )
             turn_status, turn_error = _resolve_turn_outcome(
@@ -989,7 +1038,7 @@ class TurnExecutor:
                             content=partial_content,
                             capability=capability_name,
                             events=assistant_events,
-                            attachments=generated_attachments or None,
+                            attachments=(generated_attachments or []) + voice_reply_attachments or None,
                             metadata=(
                                 {"provider_response_state": provider_response_state}
                                 if provider_response_state is not None
