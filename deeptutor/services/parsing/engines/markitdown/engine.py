@@ -75,7 +75,24 @@ class MarkItDownParser:
         if on_output:
             on_output(f"Converting {Path(source_path).name} via markitdown…")
         try:
-            converter = MarkItDown()
+            # [local patch 2026-09-02] Wire the LLM image-description switch to the
+            # local Ollama vision model (qwen3-vl). Upstream leaves it a dead knob:
+            # MarkItDown() is built without a client, so the toggle never reaches
+            # the converter. Vision is best-effort — falls back to plain MarkItDown
+            # if Ollama is unreachable.
+            if config.enable_llm_image_description:
+                try:
+                    from openai import OpenAI
+
+                    converter = MarkItDown(
+                        enable_llm_image_description=True,
+                        client=OpenAI(base_url="http://127.0.0.1:11434/v1", api_key="ollama"),
+                        llm_model="qwen3-vl:4b-instruct",
+                    )
+                except Exception:  # noqa: BLE001 - vision is best-effort
+                    converter = MarkItDown()
+            else:
+                converter = MarkItDown()
             result = converter.convert(str(source_path))
         except Exception as exc:  # noqa: BLE001 - surface as a parser error
             raise ParserError(f"markitdown failed to convert {Path(source_path).name}: {exc}")
