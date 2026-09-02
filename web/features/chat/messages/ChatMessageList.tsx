@@ -737,10 +737,9 @@ function VoiceBanner({
 
   return (
     <div
-      className="flex items-center gap-2 rounded-full border border-[var(--border)] bg-[var(--card)] px-3 py-1.5 shadow-sm"
-      // [local patch 2026-09-02] 横幅宽度随秒数伸缩（微信语音条风格）：
-      // 短语音窄条、长语音宽条，上限 420px；按钮永远 shrink-0 不会被挤出。
-      style={{ width: `clamp(170px, ${150 + (seconds ?? 5) * 14}px, 420px)` }}
+      // [local patch 2026-09-02] 对齐 dsh TtsVoiceCard：44px 高 pill、28px 圆形
+      // 播放钮、inline-flex 自适应宽度（transcript 有则显示、无则纯 pill）。
+      className="inline-flex max-w-[min(520px,90%)] items-center gap-2 h-11 rounded-[22px] border border-[var(--border)] bg-[var(--secondary)] pl-2 pr-4 shadow-sm"
     >
       <button
         type="button"
@@ -762,7 +761,7 @@ function VoiceBanner({
       <span className="shrink-0 text-[11px] font-medium text-[var(--muted-foreground)]">
         {seconds === null ? "" : `${seconds}s`}
       </span>
-      <span className="min-w-0 flex-1 truncate text-[12px] text-[var(--foreground)]" title={transcript || label}>
+      <span className="min-w-0 flex-1 truncate text-[12.5px] text-[var(--foreground)]" title={transcript || label}>
         {transcript || label}
       </span>
       {transcript && onCopy && (
