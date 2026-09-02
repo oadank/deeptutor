@@ -77,7 +77,12 @@ _GENERATION_TOOL_SERVICES: dict[str, str] = {"imagegen": "imagegen", "videogen":
 
 
 def _drop_unconfigured_generation_tools(tools: list[str]) -> list[str]:
+    # [local patch 2026-09-02] tts_speak 是后加工具：旧前端页面缓存的
+    # enabled_optional_tools 不含它，payload.tools 会漏传——这里强制并入
+    # （TTS 已配置时），不再依赖前端把工具名传全。
     present = [name for name in tools if name in _GENERATION_TOOL_SERVICES]
+    if "tts_speak" not in tools:
+        present.append("tts_speak")
     if not present:
         return tools
     try:
@@ -95,7 +100,10 @@ def _drop_unconfigured_generation_tools(tools: list[str]) -> list[str]:
     except Exception:
         logger.debug("generation-tool config probe failed; dropping them", exc_info=True)
         configured = set()
-    return [name for name in tools if name not in _GENERATION_TOOL_SERVICES or name in configured]
+    result = [name for name in tools if name not in _GENERATION_TOOL_SERVICES or name in configured]
+    if "tts_speak" in configured and "tts_speak" not in result:
+        result.append("tts_speak")
+    return result
 
 
 KB_SEED_MAX_KBS = 3
