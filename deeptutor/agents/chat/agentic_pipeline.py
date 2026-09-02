@@ -1103,6 +1103,49 @@ class AgenticChatPipeline:
                 break
         return True
 
+    async def _drain_user_injections(self, context: UnifiedContext) -> list[str]:
+        """Return user messages injected into this still-running turn.
+
+        When a mid-turn ``start_turn`` loses the session lease, the request
+        preparer persists the text as a user message carrying
+        ``metadata.injected`` plus the owning ``turn_id``. Draining happens
+        once per agent-loop round; a per-(session, turn) message-id watermark
+        keeps it idempotent regardless of pipeline instance lifetime.
+        """
+        metadata = context.metadata or {}
+        turn_id = str(metadata.get("turn_id", "") or "").strip()
+        session_id = str(getattr(context, "session_id", "") or "").strip()
+        if not turn_id or not session_id:
+            return []
+        key = (session_id, turn_id)
+        watermarks = getattr(self, "_injection_watermarks", None)
+        if watermarks is None:
+            watermarks = self._injection_watermarks = {}
+        watermark = int(watermarks.get(key, 0))
+        from deeptutor.services.session import get_session_store
+
+        messages = await get_session_store().get_messages(session_id)
+        contents: list[str] = []
+        for message in messages:
+            try:
+                message_id = int(message.get("id") or 0)
+            except (TypeError, ValueError):
+                continue
+            if message_id <= watermark:
+                continue
+            message_meta = message.get("metadata") or {}
+            if (
+                message.get("role") == "user"
+                and message_meta.get("injected")
+                and str(message_meta.get("turn_id") or "") == turn_id
+            ):
+                content = str(message.get("content") or "").strip()
+                if content:
+                    contents.append(content)
+            watermark = message_id
+        watermarks[key] = watermark
+        return contents
+
     def _augment_tool_kwargs(
         self,
         tool_name: str,

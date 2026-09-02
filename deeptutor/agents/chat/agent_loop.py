@@ -305,6 +305,19 @@ class AgentLoop:
     def _clean(self, text: str) -> str:
         return clean_thinking_tags(text, self.pipeline.binding, self.pipeline.model).strip()
 
+    async def _drain_user_injections(self, messages: list[dict[str, Any]]) -> None:
+        """Append user interjections that arrived while this turn was running.
+
+        Best-effort: a drain failure must never break the in-flight turn.
+        """
+        try:
+            drained = await self.pipeline._drain_user_injections(self.context)
+        except Exception as exc:
+            logger.warning("Failed to drain user injections: %s", exc)
+            return
+        for content in drained:
+            messages.append({"role": "user", "content": f"[用户插队] {content}"})
+
     # ---- agent loop --------------------------------------------------------
 
     async def _run_loop(
@@ -329,6 +342,8 @@ class AgentLoop:
         finish_redirect_used = False
         continued_answer_parts: list[str] = []
         while True:
+            if state.rounds > 0:
+                await self._drain_user_injections(messages)
             settling = state.exploration_rounds >= exploration_budget
             if settling:
                 if state.settlement_rounds >= MAX_SETTLEMENT_ROUNDS:

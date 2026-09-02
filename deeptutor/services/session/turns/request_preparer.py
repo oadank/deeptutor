@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import logging
 import time
 from typing import TYPE_CHECKING, Any
 import uuid
+
+logger = logging.getLogger(__name__)
 
 from deeptutor.core.stream import StreamEvent, StreamEventType
 from deeptutor.core.turn_request import TurnRequest
@@ -375,6 +378,9 @@ class TurnRequestPreparer:
                 self.owner_id,
             )
             if lease is None:
+                injected = await self._try_inject_into_active_turn(payload, session)
+                if injected is not None:
+                    return injected
                 raise RuntimeError("Session already has an active or recovering turn")
         preference_update: dict[str, Any] = {
             # Auto-routing is a one-turn execution choice; keep the durable
@@ -586,6 +592,72 @@ class TurnRequestPreparer:
                     await self.coordinator.release_turn(lease)
             raise
         return session, turn
+
+    async def _try_inject_into_active_turn(
+        self,
+        payload: dict[str, Any],
+        session: dict[str, Any],
+    ) -> tuple[dict[str, Any], dict[str, Any]] | None:
+        """Inject a mid-turn user message into the session's active turn.
+
+        Called when ``start_turn`` cannot acquire the session turn lease:
+        instead of rejecting outright, the text rides along inside the running
+        turn so the agent picks it up on its next loop round. Returns the
+        active turn envelope (with ``queued_injection``) on success, or
+        ``None`` when the caller should keep the legacy rejection.
+        """
+        active = await self.store.get_active_turn(session["id"])
+        if active is None:
+            return None
+        content = str(payload.get("content") or "").strip()
+        if not content:
+            return None
+        dropped = sorted(
+            key
+            for key in ("attachments", "references", "notebook_references", "book_references")
+            if payload.get(key)
+        )
+        if dropped:
+            logger.warning(
+                "Injection into turn %s drops non-text payload fields: %s",
+                active["id"],
+                ", ".join(dropped),
+            )
+        msg_id = await self.store.add_message(
+            session["id"],
+            "user",
+            content,
+            metadata={"injected": True, "turn_id": active["id"]},
+        )
+        event = StreamEvent(
+            type=StreamEventType.USER_INJECTION,
+            source="turn_runtime",
+            content=content,
+            metadata={"injected": True, "message_id": str(msg_id)},
+        )
+        async with self._lock:
+            execution = self._executions.get(active["id"])
+        if execution is not None:
+            # Ride the running turn's live-event path so seq numbering,
+            # subscriber fan-out and the post-stream durable flush stay
+            # consistent with the events the turn itself emits.
+            await self._publish_live_event(execution, event)
+        else:
+            await self.store.append_events(
+                active["id"],
+                [{**event.to_dict(), "session_id": session["id"], "turn_id": active["id"]}],
+            )
+        logger.info(
+            "Injected user message %s into running turn %s (session %s)",
+            msg_id,
+            active["id"],
+            session["id"],
+        )
+        return session, {
+            "id": active["id"],
+            "status": "running",
+            "queued_injection": True,
+        }
 
     async def regenerate_last_turn(
         self,
