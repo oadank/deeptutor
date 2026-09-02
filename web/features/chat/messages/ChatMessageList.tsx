@@ -285,38 +285,8 @@ export function GeneratedFileCards({
         // [local patch 2026-09-02] TTS 语音横幅：audio 附件内嵌播放条（语音块场景）。
         if (mime.startsWith("audio/") && mediaSrc) {
           return (
-            <div
-              key={key}
-              className="w-full max-w-[min(520px,90%)] overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--card)] shadow-sm"
-            >
-              <div className="flex items-center gap-2 px-3 pt-2 text-[12.5px] font-medium text-[var(--foreground)]">
-                <span aria-hidden>🔊</span>
-                <span>{t("Voice reply")}</span>
-              </div>
-              {a.transcript && (
-                <div className="px-3 pt-1 text-[12.5px] leading-relaxed text-[var(--muted-foreground)]">
-                  {a.transcript}
-                </div>
-              )}
-              <audio
-                src={mediaSrc}
-                controls
-                preload="metadata"
-                className="block w-full px-2 pt-1"
-                onPlay={(e) => pauseOtherAudio(e.currentTarget)}
-              />
-              <button
-                type="button"
-                onClick={onOpen ? () => onOpen(a) : undefined}
-                className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left transition hover:bg-[var(--muted)]/30"
-              >
-                <span className="min-w-0 truncate text-[11.5px] text-[var(--muted-foreground)]">
-                  {humanizeFilename(filename)}
-                </span>
-                <span className="shrink-0 text-[11px] text-[var(--muted-foreground)]">
-                  {t("Open")}
-                </span>
-              </button>
+            <div key={key} className="w-full max-w-[min(520px,90%)]">
+              <VoiceBanner src={mediaSrc} label={t("Voice reply")} />
             </div>
           );
         }
@@ -719,6 +689,105 @@ function CostFooter({
 // in an instant tooltip, brightening on hover.
 // [local patch 2026-09-02] 全局音频互斥：同一时刻只允许一个语音在播
 // （覆盖挂 DOM 的横幅 <audio> 和不挂 DOM 的 new Audio() 喇叭朗读）。
+function VoiceBanner({
+  src,
+  transcript,
+  label,
+  onCopy,
+}: {
+  src: string | null;
+  transcript?: string;
+  label: string;
+  onCopy?: (content: string) => void | Promise<void>;
+}) {
+  const { t } = useTranslation();
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const [playing, setPlaying] = useState(false);
+  const [seconds, setSeconds] = useState<number | null>(null);
+  const [copied, setCopied] = useState(false);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+    };
+  }, []);
+
+  const toggle = () => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    if (playing) {
+      audio.pause();
+    } else {
+      pauseOtherAudio(audio);
+      void audio.play().catch(() => setPlaying(false));
+    }
+  };
+
+  const copyTranscript = () => {
+    if (!transcript || !onCopy) return;
+    void Promise.resolve(onCopy(transcript)).then(() => {
+      setCopied(true);
+      if (timerRef.current) clearTimeout(timerRef.current);
+      timerRef.current = setTimeout(() => setCopied(false), 1600);
+    });
+  };
+
+  return (
+    <div className="flex items-center gap-2 rounded-full border border-[var(--border)] bg-[var(--card)] px-3 py-1.5 shadow-sm">
+      <button
+        type="button"
+        onClick={toggle}
+        aria-label={playing ? t("Pause") : t("Play")}
+        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[var(--primary)] text-[var(--primary-foreground)] transition hover:opacity-90"
+      >
+        {playing ? (
+          <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden>
+            <rect x="3.5" y="3.5" width="3" height="9" rx="1" fill="currentColor" />
+            <rect x="9.5" y="3.5" width="3" height="9" rx="1" fill="currentColor" />
+          </svg>
+        ) : (
+          <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden>
+            <path d="M5 3.5L12.5 8L5 12.5V3.5Z" fill="currentColor" />
+          </svg>
+        )}
+      </button>
+      <span className="shrink-0 text-[11px] font-medium text-[var(--muted-foreground)]">
+        {seconds === null ? "" : `${seconds}s`}
+      </span>
+      <span className="shrink-0 text-[12.5px] font-medium text-[var(--foreground)]">{label}</span>
+      {transcript && (
+        <span className="min-w-0 flex-1 truncate text-[12px] text-[var(--muted-foreground)]" title={transcript}>
+          {transcript}
+        </span>
+      )}
+      {transcript && onCopy && (
+        <button
+          type="button"
+          onClick={copyTranscript}
+          aria-label={t("Copy")}
+          className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[var(--muted-foreground)] transition hover:bg-[var(--muted)]/50 hover:text-[var(--foreground)]"
+        >
+          {copied ? <Check size={13} /> : <Copy size={13} />}
+        </button>
+      )}
+      <audio
+        ref={audioRef}
+        src={src ?? undefined}
+        preload="metadata"
+        className="hidden"
+        onPlay={() => setPlaying(true)}
+        onPause={() => setPlaying(false)}
+        onEnded={() => setPlaying(false)}
+        onLoadedMetadata={(e) => {
+          const d = e.currentTarget.duration;
+          setSeconds(Number.isFinite(d) ? Math.max(1, Math.ceil(d)) : null);
+        }}
+      />
+    </div>
+  );
+}
+
 export function pauseOtherAudio(current: HTMLAudioElement) {
   const w = window as typeof window & { __dtActiveAudio?: HTMLAudioElement };
   if (w.__dtActiveAudio && w.__dtActiveAudio !== current) {
@@ -1109,6 +1178,10 @@ export const UserMessage = memo(function UserMessage({
     const fn = (a.filename || "").toLowerCase();
     return mime.startsWith("audio/") || a.type === "audio" || /\.(webm|ogg|mp4|m4a)$/.test(fn);
   });
+  // [local patch 2026-09-02] 语音消息：剥壳转写（dsh voiceAsText wrapper 只给 AI）
+  const isVoiceMessage = voiceAttachments.length > 0;
+  const voiceTranscript =
+    msg.content.replace(/^\[用户发送了一条语音[\s\S]*?识别内容：/, "").replace(/。?请调用 tts_speak[\s\S]*$/, "") || msg.content;
 
   // snapshot's Space references — rendered as one collapsed tree under
   // the bubble (the sent-message mirror of the composer's tree).
@@ -1291,52 +1364,28 @@ export const UserMessage = memo(function UserMessage({
               </div>
             </div>
           </div>
+        ) : isVoiceMessage ? (
+          // [local patch 2026-09-02] 用户语音消息 = 一条语音横幅（回放原声 + 转写）
+          <VoiceBanner
+            src={
+              voiceAttachments.length > 0
+                ? imageSrcForAttachment(voiceAttachments[0])
+                : null
+            }
+            transcript={voiceTranscript}
+            label={t("Voice message")}
+            onCopy={onCopy}
+          />
         ) : (
           <div
             data-turn-bubble="true"
             className="rounded-2xl bg-[var(--secondary)] px-4 py-2.5 text-[14px] leading-relaxed text-[var(--foreground)] shadow-sm"
           >
-            {/* [local patch 2026-09-02] 语音消息：气泡只显示识别文本，wrapper 前缀
-                （dsh voiceAsText 契约，给 AI 的语音上下文）在展示层剥掉。 */}
-            <div className="whitespace-pre-wrap">
-              {msg.content.replace(/^\[用户发送了一条语音[\s\S]*?识别内容：/, "").replace(/。?请调用 tts_speak[\s\S]*$/, "") || msg.content}
-            </div>
+            <div className="whitespace-pre-wrap">{msg.content}</div>
           </div>
         )}
         {!editing && refTreeItems.length > 0 && (
           <div className="pr-1">
-            {voiceAttachments.length > 0 && (
-              <div className="mb-1 flex flex-col gap-2">
-                {voiceAttachments.map((a, vi) => {
-                  const mime = (a.mime_type || "").toLowerCase();
-                  const src = mime.startsWith("audio/") ? imageSrcForAttachment(a) : null;
-                  const filename = a.filename || t("Voice message");
-                  return (
-                    <div
-                      key={`voice-${vi}`}
-                      className="w-full max-w-[min(520px,90%)] overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--card)] shadow-sm"
-                    >
-                      <div className="flex items-center gap-2 px-3 pt-2 text-[12.5px] font-medium text-[var(--foreground)]">
-                        <span aria-hidden>🎤</span>
-                        <span>{t("Voice message")}</span>
-                      </div>
-                      {src && (
-                        <audio
-                          src={src}
-                          controls
-                          preload="metadata"
-                          className="block w-full px-2 pt-1"
-                          onPlay={(e) => pauseOtherAudio(e.currentTarget)}
-                        />
-                      )}
-                      <div className="min-w-0 truncate px-3 py-2 text-[11.5px] text-[var(--muted-foreground)]">
-                        {filename}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
             <ContextReferenceTree
               items={refTreeItems}
               direction="down"
