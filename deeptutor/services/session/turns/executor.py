@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import uuid
 from collections.abc import Callable
 import contextlib
@@ -840,13 +841,23 @@ class TurnExecutor:
             # rounds (their text stayed in the trace, never the answer).
             assistant_content = _persisted_answer()
 
-            # [local patch 2026-09-02] 语音铁律（dsh 同款）：用户语音消息的 turn，
-            # assistant 回复自动 TTS 成语音 artifact 挂到消息上——不依赖模型自觉
-            # 调工具（实测模型会口头应答却不调用）。失败只记日志不阻塞回复。
+            # [local patch 2026-09-02] 语音铁律 v2（dsh voice 契约）：语音消息的
+            # turn，模型按指令在回复末尾输出 [[voice]]口语化文本[[/voice]]——解析
+            # 出口语文本 → TTS 成语音 artifact；正文剥掉语音块。模型没写块就 NOT
+            # 合成（绝不朗读正文——老大明确否决）。
+            voice_text = ""
             voice_reply_attachments: list[dict[str, Any]] = []
+            voice_match = re.search(
+                r"\[\[voice\]\]([\s\S]*?)\[\[/voice\]\]", assistant_content
+            )
+            if voice_match:
+                voice_text = voice_match.group(1).strip()
+                assistant_content = (
+                    assistant_content.replace(voice_match.group(0), "").strip()
+                )
             if (
                 str(payload.get("content") or "").startswith("[用户发送了一条语音")
-                and assistant_content.strip()
+                and voice_text
             ):
                 try:
                     from deeptutor.services.sandbox.artifacts import (
@@ -855,7 +866,7 @@ class TurnExecutor:
                     from deeptutor.services.voice import synthesize_speech
 
                     audio_bytes, audio_content_type = await synthesize_speech(
-                        assistant_content
+                        voice_text
                     )
                     ext = "mp3" if "mpeg" in (audio_content_type or "") else "wav"
                     from deeptutor.services.path_service import get_path_service
@@ -874,19 +885,19 @@ class TurnExecutor:
                             "url": artifact.url,
                             "mime_type": artifact.mime_type,
                             "size_bytes": artifact.size_bytes,
+                            "transcript": voice_text,
                         }
                         for artifact in collect_public_artifacts(str(media_dir))
                         if artifact.filename == voice_filename
                     ]
                     logger.info(
-                        "voice-reply auto-TTS ok: %s (%d bytes)",
+                        "voice-reply ok: %s (%d bytes, transcript %d chars)",
                         voice_filename,
                         len(audio_bytes),
+                        len(voice_text),
                     )
                 except Exception:
-                    logger.warning(
-                        "voice-reply auto-TTS failed", exc_info=True
-                    )
+                    logger.warning("voice-reply TTS failed", exc_info=True)
 
             # Assistant continues the same branch as the user message it
             # answers. If we just persisted a new user row we chain off

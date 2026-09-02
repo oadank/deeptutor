@@ -293,6 +293,11 @@ export function GeneratedFileCards({
                 <span aria-hidden>🔊</span>
                 <span>{t("Voice reply")}</span>
               </div>
+              {a.transcript && (
+                <div className="px-3 pt-1 text-[12.5px] leading-relaxed text-[var(--muted-foreground)]">
+                  {a.transcript}
+                </div>
+              )}
               <audio
                 src={mediaSrc}
                 controls

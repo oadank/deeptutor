@@ -522,7 +522,7 @@ export default memo(function ChatComposer({
         (a) => (a.filename || "").startsWith("voice-") && (a.mimeType || "").startsWith("audio/"),
       );
       const finalContent = voiceClip
-        ? `[用户发送了一条语音，识别内容：${content}。请调用 tts_speak 工具，用口语化、简短的语音回复这条消息（不要照抄你的文字回复）；除非用户明确要求文字。]`
+        ? `[用户发送了一条语音，识别内容：${content}。回复规则：①正常写你的文字回复；②在回复的最末尾另起一行，输出一个语音块，格式：[[voice]]把你这段回复的口语化版本写在这里[[/voice]]。语音块里像跟朋友聊天一样说话，简短自然温暖，绝不包含代码/公式/markdown/列表/长数字——它是单独说给用户听的，不是朗读正文。每次回复都必须带这个语音块，系统会把它转成语音播放给用户。]`
         : content;
       onSend(finalContent);
       setHasContent(false);

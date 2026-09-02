@@ -169,6 +169,8 @@ export interface MessageAttachment {
   generated?: boolean;
   /** Byte size of the generated file, for the card's subtitle. */
   size_bytes?: number;
+  /** [local patch 2026-09-02] TTS 语音横幅：口语化语音块原文（横幅内显示）。 */
+  transcript?: string;
 }
 
 export interface MessageRequestSnapshot {
