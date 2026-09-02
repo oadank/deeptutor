@@ -449,13 +449,15 @@ export const AssistantMessage = memo(function AssistantMessage({
   // once the turn is finished — mid-stream the text is still arriving and a
   // partial object would not match anyway — and only from a message that really
   // produced a card.
-  const body = useMemo(
-    () =>
+  const body = useMemo(() => {
+    const raw =
       courseHandoffs.length && !isStreaming
         ? stripLeakedHandoffJson(msg.content)
-        : msg.content,
-    [courseHandoffs.length, isStreaming, msg.content],
-  );
+        : msg.content;
+    // [local patch 2026-09-02] 语音契约：正文不显示 [[voice]] 块（口语文本已
+    // 由系统转成语音横幅）。流式/落库统一在显示层剥离。
+    return raw.replace(/\[\[voice\]\][\s\S]*?\[\[\/voice\]\]/g, "").trim();
+  }, [courseHandoffs.length, isStreaming, msg.content]);
 
   // Interleaved segments for the default chat surface — text emitted
   // before the ask_user call renders above the card; text emitted by

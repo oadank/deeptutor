@@ -534,7 +534,7 @@ export default memo(function ChatComposer({
         (a) => (a.filename || "").startsWith("voice-") && (a.mimeType || "").startsWith("audio/"),
       );
       const finalContent = voiceClip
-        ? `[语音消息] ${content}`
+        ? `[语音消息] ${content}。这是用麦克风说的语音消息：请先正常文字回复；同时必须调用 tts_speak 工具（用简短、口语化、温暖的语音内容发一条语音消息给我）。文字回复里绝不要出现 [[voice]] 标记、语音文件名或播放说明。]`
         : content;
       onSend(finalContent);
       setHasContent(false);

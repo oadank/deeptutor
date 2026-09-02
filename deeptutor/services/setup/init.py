@@ -188,9 +188,12 @@ def _seed_default_personas() -> None:
         from deeptutor.services.persona.service import PersonaService
 
         admin_personas = get_admin_path_service().get_workspace_dir() / "personas"
-        seeded = PersonaService(root=admin_personas).seed_presets()
-        if seeded:
-            _get_setup_logger().info(f"Seeded default personas: {', '.join(seeded)}")
+        # [local patch 2026-09-02] Disabled: bundled EN presets kept re-seeding
+        # after the user deleted them. Personas are now user-created only.
+        pass
+        # seeded = PersonaService(root=admin_personas).seed_presets()
+        # if seeded:
+        #     _get_setup_logger().info(f"Seeded default personas: {', '.join(seeded)}")
     except Exception as e:
         _get_setup_logger().warning(f"Failed to seed default personas: {e}")
 

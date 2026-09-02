@@ -331,12 +331,19 @@ class TtsSpeakTool(BaseTool):
         artifacts = _write_media(
             run_dir, [(audio, content_type)], stem=_slug(text, "speech"), default_ext="mp3"
         )
-        return _artifact_result(
+        result = _artifact_result(
             artifacts,
             empty_message="Speech synthesis produced no saved files.",
             text=text[:200],
             kind="speech",
         )
+        # [local patch 2026-09-02] 口语文本随 artifact 走（前端语音横幅显示+复制）
+        for source in result.sources or []:
+            source["transcript"] = text
+        if result.metadata and result.metadata.get("artifacts"):
+            for artifact in result.metadata["artifacts"]:
+                artifact["transcript"] = text
+        return result
 
 
 __all__ = ["ImagegenTool", "VideogenTool", "TtsSpeakTool"]
