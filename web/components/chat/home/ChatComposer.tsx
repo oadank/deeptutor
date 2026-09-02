@@ -411,23 +411,35 @@ export default memo(function ChatComposer({
     };
   }, [prefillInputRef]);
 
-  // Microphone → speech-to-text. Appends the transcript to whatever is already
-  // in the composer so a dictated phrase can be combined with typed text.
+  // [local patch 2026-09-02] 语音直发（dsh 体验）：转写文本不再写输入框，
+  // 由 handleVoiceClip 组装语音消息（横幅附件 + 识别内容）直接发送。
   const handleTranscript = useCallback((text: string) => {
-    const current = inputHandleRef.current?.getValue() || "";
-    const next = current.trim() ? `${current.trimEnd()} ${text}` : text;
-    inputHandleRef.current?.setValue(next);
+    void text;
   }, []);
-  // [local patch 2026-09-02] 语音横幅：录音作为附件随消息发送（用户侧可回放），
-  // 转写文本照旧进输入框供 AI 阅读。
+  // [local patch 2026-09-02] 语音横幅：录音作为附件随消息发送（用户侧可回放）。
   const handleVoiceClip = useCallback(
-    ({ blob, mimeType }: { blob: Blob; mimeType: string; text: string }) => {
+    ({ blob, mimeType, text }: { blob: Blob; mimeType: string; text: string }) => {
       const ext = mimeType.includes("ogg") ? "ogg" : mimeType.includes("mp4") ? "mp4" : "webm";
       const stamp = new Date().toISOString().slice(11, 19).replace(/:/g, "");
       onAddFiles([new File([blob], `voice-${stamp}.${ext}`, { type: mimeType })]);
+      pendingVoiceSendRef.current = text;
     },
     [onAddFiles],
   );
+  // 附件 state（ChatWorkspace）落地后自动直发：content 由 doSend 加语音前缀。
+  const pendingVoiceSendRef = useRef<string | null>(null);
+  const doSendRef = useRef<(content: string) => void>(() => {});
+  useEffect(() => {
+    const text = pendingVoiceSendRef.current;
+    if (text === null) return;
+    const hasVoice = attachments.some(
+      (a) => (a.filename || "").startsWith("voice-") && (a.mimeType || "").startsWith("audio/"),
+    );
+    if (hasVoice) {
+      pendingVoiceSendRef.current = null;
+      queueMicrotask(() => doSendRef.current?.(text));
+    }
+  }, [attachments]);
   const recorder = useVoiceRecorder(handleTranscript, handleVoiceClip);
 
   // Composer-row compaction: when the available width drops below ~620 px
@@ -534,6 +546,8 @@ export default memo(function ChatComposer({
     },
     [attachments, focusTextarea, onSend],
   );
+  // [local patch 2026-09-02] 桥给录音直发 effect（attachments 落地后自动发）。
+  doSendRef.current = doSend;
 
   const hasReferences =
     !!attachments.length ||
@@ -1197,6 +1211,17 @@ export default memo(function ChatComposer({
                 {/* [local patch 2026-09-02] 独立停止按钮：turn 进行中主按钮
                     专职发送（后端注入），取消流式回复由它承担。答题等待时
                     不显示——发答案本身就是推进方式。 */}
+                {recorder.state === "recording" && (
+                  <button
+                    type="button"
+                    onClick={recorder.cancel}
+                    className="inline-flex h-8 shrink-0 items-center rounded-[10px] border border-[var(--border)] px-2.5 text-[11px] text-[var(--muted-foreground)] transition hover:bg-[var(--muted)]/55 hover:text-[var(--foreground)]"
+                    aria-label={t("Cancel recording")}
+                    title={t("Cancel recording")}
+                  >
+                    {t("Cancel")}
+                  </button>
+                )}
                 {streamingBlocksSend && (
                   <button
                     type="button"

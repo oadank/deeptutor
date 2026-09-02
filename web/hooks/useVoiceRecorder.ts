@@ -31,6 +31,7 @@ export function useVoiceRecorder(
   onTranscriptRef.current = onTranscript;
   const onClipRef = useRef(onClip);
   onClipRef.current = onClip;
+  const cancelRef = useRef(false);
 
   const releaseStream = useCallback(() => {
     streamRef.current?.getTracks().forEach((track) => track.stop());
@@ -64,6 +65,13 @@ export function useVoiceRecorder(
     recorder.onstop = async () => {
       const mimeType = stripAudioMimeParameters(recorder.mimeType);
       releaseStream();
+      // [local patch 2026-09-02] 取消录音：丢弃素材，不转写不发送
+      if (cancelRef.current) {
+        cancelRef.current = false;
+        chunksRef.current = [];
+        setState("idle");
+        return;
+      }
       const blob = new Blob(chunksRef.current, { type: mimeType });
       chunksRef.current = [];
       if (!blob.size) {
@@ -117,6 +125,13 @@ export function useVoiceRecorder(
     }
   }, []);
 
+  // [local patch 2026-09-02] 取消录音：丢弃素材，不转写不发送
+  const cancel = useCallback(() => {
+    cancelRef.current = true;
+    const recorder = recorderRef.current;
+    if (recorder && recorder.state !== "inactive") recorder.stop();
+  }, [stop]);
+
   const toggle = useCallback(() => {
     if (state === "recording") stop();
     else if (state === "idle") void start();
@@ -131,5 +146,5 @@ export function useVoiceRecorder(
     };
   }, []);
 
-  return { state, error, toggle, start, stop };
+  return { state, error, toggle, start, stop, cancel };
 }
