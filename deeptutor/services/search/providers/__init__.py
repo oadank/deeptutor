@@ -171,6 +171,7 @@ def _register_builtin_providers() -> None:
     # Import for side effects (register_provider decorators).
     from . import (
         aliyun_iqs,
+        anysearch,
         bocha,
         brave,
         doubao,
@@ -188,6 +189,7 @@ def _register_builtin_providers() -> None:
 
     _ = (
         aliyun_iqs,
+        anysearch,
         bocha,
         brave,
         doubao,

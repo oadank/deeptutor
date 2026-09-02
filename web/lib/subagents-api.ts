@@ -118,13 +118,26 @@ export interface SubagentBackendOptions {
 }
 
 export async function getBackendOptions(): Promise<SubagentBackendOptions[]> {
-  const res = await apiFetch(apiUrl("/api/v1/subagents/backends/options"), {
-    cache: "no-store",
-  });
-  if (!res.ok) throw new Error(`Request failed: ${res.status}`);
-  const data = (await res.json()) as { backends: SubagentBackendOptions[] };
-  return data.backends ?? [];
+  // The agents settings hub renders every backend's editor at once, and each
+  // editor calls this on mount. Nine editors => nine identical full-catalog
+  // requests => the backend's per-CLI probes pile up and tail requests stall
+  // long enough to die in transit. Share one in-flight promise instead.
+  if (!inflightBackendOptions) {
+    inflightBackendOptions = (async () => {
+      const res = await apiFetch(apiUrl("/api/v1/subagents/backends/options"), {
+        cache: "no-store",
+      });
+      if (!res.ok) throw new Error(`Request failed: ${res.status}`);
+      const data = (await res.json()) as { backends: SubagentBackendOptions[] };
+      return data.backends ?? [];
+    })().finally(() => {
+      inflightBackendOptions = null;
+    });
+  }
+  return inflightBackendOptions;
 }
+
+let inflightBackendOptions: Promise<SubagentBackendOptions[]> | null = null;
 
 /**
  * Re-pull one backend's model catalog (the settings "sync" button). For Claude
