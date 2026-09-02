@@ -72,6 +72,22 @@ class ChatPromptAssembler:
             PromptBlock("runtime_context", self._runtime_context_block()),
             PromptBlock("runtime_policy", self._t("runtime_policy")),
             PromptBlock("loop", self._t("loop.system")),
+            # [local patch 2026-09-02] 语音消息规则（一次注入，不随消息重复）：
+            # 用户语音消息以「[语音消息]」开头，回复时末尾写 [[voice]] 口语块，
+            # 系统自动转成语音横幅。详见 executor 的 voice-block 解析。
+            PromptBlock(
+                "voice_policy",
+                "Voice-message rules: a user message starting with "
+                "「[语音消息]」 was spoken via microphone (the rest is its "
+                "transcript). When replying to such a message: 1) write your "
+                "normal text reply; 2) at the very end, append a voice block on "
+                "its own line — [[voice]]a short, warm, conversational version "
+                "of this reply, spoken as if to a friend[[/voice]] — with NO "
+                "code, formulas, markdown, lists or long numbers inside; the "
+                "system converts it to a voice banner automatically. 3) Never "
+                "mention audio files, filenames, or playback instructions in "
+                "the written reply.",
+            ),
         ]
         # Capability playbooks sit high so they frame the whole turn when active;
         # empty blocks are omitted by ``system_prompt``'s join.
