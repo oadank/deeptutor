@@ -429,6 +429,7 @@ export default memo(function ChatComposer({
   // 附件 state（ChatWorkspace）落地后自动直发：content 由 doSend 加语音前缀。
   const pendingVoiceSendRef = useRef<string | null>(null);
   const doSendRef = useRef<(content: string) => void>(() => {});
+  const [queuedCount, setQueuedCount] = useState(0);
   useEffect(() => {
     const text = pendingVoiceSendRef.current;
     if (text === null) return;
