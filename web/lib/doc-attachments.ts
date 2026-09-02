@@ -235,6 +235,10 @@ export function extOf(filename: string): string {
  */
 export function classifyFile(file: File): FileKind | null {
   const ext = extOf(file.name);
+  // [local patch 2026-09-02] Audio clips (mic recordings) attach as files so
+  // voice-message banners can play them back; treated as generic attachments.
+  if (file.type.startsWith("audio/") || ["webm", "ogg", "mp3", "m4a", "wav"].includes(ext))
+    return "doc";
   if (ext === ".svg" || file.type === "image/svg+xml") return "doc";
   if (file.type && file.type.startsWith("image/")) return "image";
   if (file.type && SUPPORTED_DOC_MIMES.has(file.type)) return "doc";
