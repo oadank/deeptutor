@@ -1292,6 +1292,39 @@ export function ChatStateAdapterProvider({
     [],
   );
 
+  // [local patch 2026-09-03] 流式看门狗：后端 turn 静默死亡（服务重启/孤儿
+  // 等待/断线）时，前端会永远停在"运行中"+停止按钮。每 20s 扫一遍流式中的
+  // 会话，向后端核实活跃 turn；不在活跃列表里就把界面落地为 completed。
+  useEffect(() => {
+    const timer = window.setInterval(async () => {
+      const state = stateRef.current;
+      for (const [key, session] of Object.entries(state.sessions)) {
+        if (!session.isStreaming || !session.sessionId || !session.activeTurnId)
+          continue;
+        try {
+          const resp = await fetch(
+            `/api/sessions/${encodeURIComponent(session.sessionId)}/active-turn`,
+            { cache: "no-store" },
+          );
+          if (!resp.ok) continue;
+          const data = (await resp.json()) as {
+            active_turns?: Array<{ id?: string; status?: string }>;
+          };
+          const live = (data.active_turns ?? []).some(
+            (turn) => turn.id === session.activeTurnId,
+          );
+          if (!live) {
+            dispatch({ type: "STREAM_END", key, status: "completed" });
+          }
+        } catch {
+          // 网络抖动时跳过本轮，下一轮再核实
+        }
+      }
+    }, 20_000);
+    return () => window.clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const makeDraftKey = useCallback(() => {
     draftCounterRef.current += 1;
     return `draft_${Date.now()}_${draftCounterRef.current}`;

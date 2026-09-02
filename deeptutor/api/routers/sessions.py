@@ -165,6 +165,26 @@ async def get_session(session_id: str):
     return session
 
 
+@router.get("/{session_id}/active-turn")
+async def get_active_turn_status(session_id: str):
+    """[local patch 2026-09-03] Frontend watchdog: report the session's live
+    turns so a stale "streaming" UI (backend turn died silently — restart,
+    orphaned wait) can finalize itself instead of showing a stop button
+    forever."""
+    store = get_session_store()
+    session = await store.get_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Session not found")
+    list_active_turns = getattr(store, "list_active_turns", None)
+    active: list[dict[str, str]] = []
+    if callable(list_active_turns):
+        for turn in await list_active_turns(session_id):
+            active.append(
+                {"id": str(turn.get("id") or ""), "status": str(turn.get("status") or "")}
+            )
+    return {"active_turns": active}
+
+
 @router.get("/{session_id}/ask-hint")
 async def get_session_ask_hint(session_id: str) -> dict[str, Any]:
     """One line the user is likely to type next, for the home composer placeholder."""
