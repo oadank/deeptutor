@@ -37,7 +37,7 @@ import yaml
 from deeptutor.services.path_service import get_path_service
 
 _FRONTMATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n?", re.DOTALL)
-_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}$")
+_NAME_RE = re.compile(r"^[a-z0-9\u4e00-\u9fff][a-z0-9\u4e00-\u9fff-]{0,63}$")
 
 PERSONA_FILE = "PERSONA.md"
 

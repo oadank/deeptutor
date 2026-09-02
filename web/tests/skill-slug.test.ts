@@ -22,9 +22,14 @@ test("slugifySkillName preserves valid hyphenated names", () => {
 });
 
 test("isValidSkillName mirrors backend skill name contract", () => {
-  assert.equal(SKILL_NAME_PATTERN, "^[a-z0-9][a-z0-9-]{0,63}$");
+  assert.equal(
+    SKILL_NAME_PATTERN,
+    "^[a-z0-9\\u4e00-\\u9fff][a-z0-9\\u4e00-\\u9fff-]{0,63}$",
+  );
   assert.equal(isValidSkillName("socratic-math-mentor"), true);
   assert.equal(isValidSkillName("a".repeat(64)), true);
+  assert.equal(isValidSkillName("耐心导师"), true);
+  assert.equal(isValidSkillName("数学-小助手"), true);
   assert.equal(isValidSkillName(""), false);
   assert.equal(isValidSkillName("-teacher"), false);
   assert.equal(isValidSkillName("Teacher"), false);
