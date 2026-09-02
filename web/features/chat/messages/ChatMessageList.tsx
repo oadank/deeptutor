@@ -113,6 +113,8 @@ interface ChatMessageItem {
   attachments?: MessageAttachment[];
   requestSnapshot?: MessageRequestSnapshot;
   parentMessageId?: number | null;
+  /** [local patch 2026-09-03] 消息时间戳（秒级 epoch；后端字段 created_at）。 */
+  createdAt?: number | null;
 }
 
 interface NotebookReferenceGroup {
@@ -653,37 +655,35 @@ export const AssistantMessage = memo(function AssistantMessage({
 
 AssistantMessage.displayName = "AssistantMessage";
 
-function CostFooter({
-  cost,
-  tokens,
-  calls,
-}: {
-  cost: number;
-  tokens: number;
-  calls: number;
-}) {
-  const { t } = useTranslation();
-  const formatCost = (usd: number) => {
-    if (usd < 0.01) return `$${usd.toFixed(4)}`;
-    return `$${usd.toFixed(2)}`;
-  };
-  const formatTokens = (n: number) => {
-    if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
-    return String(n);
-  };
+/**
+ * [local patch 2026-09-03] 消息发送时间。聊天里原来只显示
+ * cost / tokens / calls 这类统计（老大：没用），换成时间戳：
+ * 今天显示 HH:MM，跨天显示 MM-DD HH:MM，悬停看完整时间。
+ */
+function MessageTime({ value }: { value: number }) {
+  const date = new Date(value * 1000);
+  const now = new Date();
+  const sameDay = date.toDateString() === now.toDateString();
+  const label = sameDay
+    ? date.toLocaleTimeString([], {
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false,
+      })
+    : date.toLocaleString([], {
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        hour12: false,
+      });
   return (
-    <div className="flex items-center gap-1.5 text-[11px] text-[var(--muted-foreground)]/70">
-      <Coins size={11} strokeWidth={1.5} className="shrink-0" />
-      <span>{formatCost(cost)}</span>
-      <span className="opacity-50">·</span>
-      <span>
-        {formatTokens(tokens)} {t("tokens")}
-      </span>
-      <span className="opacity-50">·</span>
-      <span>
-        {calls} {t("calls")}
-      </span>
-    </div>
+    <span
+      className="text-[11px] tabular-nums text-[var(--muted-foreground)]/70"
+      title={date.toLocaleString()}
+    >
+      {label}
+    </span>
   );
 }
 
@@ -1812,15 +1812,19 @@ export const ChatMessageList = memo(function ChatMessageList({
                     )}
                   </div>
                 )}
-                {costSummary && (
-                  <div className="ml-auto">
-                    <CostFooter
-                      cost={costSummary.total_cost_usd ?? 0}
-                      tokens={costSummary.total_tokens ?? 0}
-                      calls={costSummary.total_calls ?? 0}
-                    />
-                  </div>
-                )}
+                {(() => {
+                  // [local patch 2026-09-03] 消息时间戳：聊天里原来只显示
+                  // cost/tokens/calls 这类没用的统计，换成发送时间。
+                  const raw =
+                    msg.createdAt ??
+                    (msg as { created_at?: number }).created_at ??
+                    Date.now() / 1000;
+                  return (
+                    <div className="ml-auto">
+                      <MessageTime value={raw} />
+                    </div>
+                  );
+                })()}
               </div>
             )}
           </div>

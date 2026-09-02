@@ -928,6 +928,10 @@ class TurnExecutor:
                     )
                     voice_reply_attachments = [
                         {
+                            # [local patch 2026-09-03] generated=True 是必需的：
+                            # 前端 mergeGeneratedFiles() 只渲染带该标记的附件，
+                            # 缺了它音频文件生成了也永远画不出语音横幅。
+                            "generated": True,
                             "type": "audio",
                             "filename": artifact.filename,
                             "url": artifact.url,

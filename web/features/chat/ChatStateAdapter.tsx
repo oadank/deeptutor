@@ -208,6 +208,8 @@ export interface MessageItem {
   requestSnapshot?: MessageRequestSnapshot;
   /** Edit-branching: id of the message this row continues. */
   parentMessageId?: number | null;
+  /** [local patch 2026-09-03] 消息时间戳（后端 created_at，秒级 epoch）。 */
+  createdAt?: number | null;
 }
 
 interface SessionEntry extends ChatState {
@@ -835,7 +837,13 @@ function reducer(state: ProviderState, action: Action): ProviderState {
               action.personaSelection !== undefined
                 ? action.personaSelection
                 : existing.personaSelection,
-            messages: action.messages,
+            messages: (action.messages ?? []).map((m) => ({
+              ...m,
+              createdAt:
+                m.createdAt ??
+                (m as { created_at?: number }).created_at ??
+                null,
+            })),
             isStreaming: (action.status || "idle") === "running",
             currentStage: "",
             activeTurnId: action.activeTurnId || null,
