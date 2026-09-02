@@ -864,49 +864,62 @@ class TurnExecutor:
             # 先让模型把本轮回复改写成一段口语稿（不是朗读正文），再拿口语稿去
             # TTS。模型写块时优先用块。
             if is_voice_turn and not voice_text and assistant_content.strip():
-                try:
-                    from deeptutor.services.llm import stream as llm_stream
+                # 网关抽风时改写调用会失败 → 超时 25s + 重试一次；仍失败就不出语音
+                # （绝不朗读正文）。
+                for _attempt in range(2):
+                    try:
+                        from deeptutor.services.llm import stream as llm_stream
 
-                    rewrite_prompt = (
-                        "把下面这段助手回复改写成一小段可以直接念出来的口语稿。"
-                        "要求：2-4 句，像跟朋友聊天，短句，不要 markdown、不要代码、"
-                        "不要列表、不要括号注释、不要长串数字，只输出口语稿本身。\n\n"
-                        f"助手回复：\n{assistant_content[:1200]}"
-                    )
-                    buf: list[str] = []
-                    async for chunk in llm_stream(
-                        prompt=rewrite_prompt,
-                        system_prompt="你是口语化改写助手，只输出口语稿。",
-                        temperature=0.4,
-                        max_tokens=220,
-                    ):
-                        buf.append(chunk)
-                    spoken = "".join(buf).strip().strip('"').strip("'").strip()
-                    if spoken and not spoken.startswith("{"):
-                        voice_text = spoken
-                        logger.info("voice-reply fallback: spoken script %d chars", len(spoken))
-                except Exception:
-                    logger.debug("voice-reply spoken rewrite failed", exc_info=True)
+                        rewrite_prompt = (
+                            "把下面这段助手回复改写成一小段可以直接念出来的口语稿。"
+                            "要求：2-4 句，像跟朋友聊天，短句，不要 markdown、不要代码、"
+                            "不要列表、不要括号注释、不要长串数字，只输出口语稿本身。\n\n"
+                            f"助手回复：\n{assistant_content[:1200]}"
+                        )
+
+                        async def _rewrite() -> str:
+                            buf: list[str] = []
+                            async for chunk in llm_stream(
+                                prompt=rewrite_prompt,
+                                system_prompt="你是口语化改写助手，只输出口语稿。",
+                                temperature=0.4,
+                                max_tokens=220,
+                            ):
+                                buf.append(chunk)
+                            return "".join(buf)
+
+                        spoken = (
+                            await asyncio.wait_for(_rewrite(), timeout=25)
+                        ).strip().strip('"').strip("'").strip()
+                        if spoken and not spoken.startswith("{"):
+                            voice_text = spoken
+                            break
+                    except Exception:
+                        logger.warning("voice-reply spoken rewrite attempt failed", exc_info=True)
+                        await asyncio.sleep(1)
             if is_voice_turn and voice_text:
                 try:
-                    from deeptutor.services.sandbox.artifacts import (
-                        collect_public_artifacts,
-                    )
                     from deeptutor.services.voice import synthesize_speech
+                    # [local patch 2026-09-03] 必须走 tool 同一套落盘路径：
+                    # media_gen/media/tts_<hex>/ —— collect_public_artifacts 只认
+                    # 这个根；之前写到 media_gen/tts/ 下扫出来永远是空（生成了
+                    # 音频却挂不上消息，变成孤儿文件）。
+                    from deeptutor.tools.media_gen_tool import (
+                        _run_dir,
+                        _write_media,
+                    )
 
                     audio_bytes, audio_content_type = await synthesize_speech(
                         voice_text
                     )
                     ext = "mp3" if "mpeg" in (audio_content_type or "") else "wav"
-                    from deeptutor.services.path_service import get_path_service
-
-                    media_dir = (
-                        get_path_service().get_task_workspace("chat", "media_gen")
-                        / "tts"
+                    run_dir = _run_dir(None, "tts")
+                    artifacts = _write_media(
+                        run_dir,
+                        [(audio_bytes, audio_content_type)],
+                        stem="voice-reply",
+                        default_ext=ext,
                     )
-                    media_dir.mkdir(parents=True, exist_ok=True)
-                    voice_filename = f"voice-reply-{uuid.uuid4().hex[:12]}.{ext}"
-                    (media_dir / voice_filename).write_bytes(audio_bytes)
                     voice_reply_attachments = [
                         {
                             "type": "audio",
@@ -916,13 +929,11 @@ class TurnExecutor:
                             "size_bytes": artifact.size_bytes,
                             "transcript": voice_text,
                         }
-                        for artifact in collect_public_artifacts(str(media_dir))
-                        if artifact.filename == voice_filename
+                        for artifact in artifacts
                     ]
                     logger.info(
-                        "voice-reply ok: %s (%d bytes, transcript %d chars)",
-                        voice_filename,
-                        len(audio_bytes),
+                        "voice-reply ok: %d attachment(s), transcript %d chars",
+                        len(voice_reply_attachments),
                         len(voice_text),
                     )
                 except Exception:
