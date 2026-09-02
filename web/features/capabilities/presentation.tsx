@@ -1,5 +1,6 @@
 import {
   BarChart3,
+  BookOpen,
   BrainCircuit,
   CircleHelp,
   Clapperboard,
@@ -160,6 +161,26 @@ export const CHAT_CAPABILITIES: ChatCapabilityDef[] = [
     allowedTools: ["web_search", "code_execution"],
     defaultTools: [],
     legacy: true,
+  },
+  {
+    // [local patch 2026-09-03] 静态展示条目：这两个能力此前只从后端 manifest
+    // 动态合并，露出英文 id + 英文描述（未走 i18n）。补静态条目走 t() 翻译。
+    value: "immersive_reading",
+    label: "Immersive Reading",
+    description: "Read a document alongside the assistant with cited pages",
+    icon: BookOpen,
+    allowedTools: [],
+    defaultTools: [],
+    secondary: true,
+  },
+  {
+    value: "math_animator",
+    label: "Math Animator",
+    description: "Generate math animations or storyboard images with Manim",
+    icon: Clapperboard,
+    allowedTools: [],
+    defaultTools: [],
+    secondary: true,
   },
 ];
 

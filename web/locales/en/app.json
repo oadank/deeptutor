@@ -4733,5 +4733,7 @@
   "{{count}} session(s)": "{{count}} session(s)",
   "{{count}} sessions": "{{count}} sessions",
   "{{ready}}/{{total}} pages": "{{ready}}/{{total}} pages",
-  "“{{title}}” and its reading conversations will be deleted. The {{count}} materials in it stay in your library.": "“{{title}}” and its reading conversations will be deleted. The {{count}} materials in it stay in your library."
+  "“{{title}}” and its reading conversations will be deleted. The {{count}} materials in it stay in your library.": "“{{title}}” and its reading conversations will be deleted. The {{count}} materials in it stay in your library.",
+  "Read a document alongside the assistant with cited pages": "Read a document alongside the assistant with cited pages",
+  "Generate math animations or storyboard images with Manim": "Generate math animations or storyboard images with Manim"
 }

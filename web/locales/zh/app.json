@@ -38,7 +38,7 @@
   "Papers": "论文",
   "Deep Solve": "深度解题",
   "Quiz Generation": "题目生成",
-  "Math Animator": "数学动画",
+  "Math Animator": "数学动画师",
   "Guided Learning": "引导式学习",
   "Flexible conversation with any tool": "灵活对话，可使用任意工具",
   "Multi-step reasoning & problem solving": "多步推理与问题求解",
@@ -3578,7 +3578,7 @@
   "\"{{name}}\" will be deleted.": "「{{name}}」将被删除。",
   "Deleted \"{{name}}\"": "已删除「{{name}}」",
   "Notebook exported": "笔记本已导出",
-  "Immersive Reading": "沉浸式阅读",
+  "Immersive Reading": "沉浸阅读",
   "Read a document with the assistant, cited line by line": "与助手一起读文档，逐句给出出处",
   "Immersive reading": "沉浸式阅读",
   "Open a document to read": "打开一份文档开始阅读",
@@ -4733,5 +4733,7 @@
   "{{count}} session(s)": "{{count}} 个会话",
   "{{count}} sessions": "{{count}} 个会话",
   "{{ready}}/{{total}} pages": "{{ready}}/{{total}} 页",
-  "“{{title}}” and its reading conversations will be deleted. The {{count}} materials in it stay in your library.": "「{{title}}」及其阅读对话将被删除。其中的 {{count}} 份资料仍保留在资料库中。"
+  "“{{title}}” and its reading conversations will be deleted. The {{count}} materials in it stay in your library.": "「{{title}}」及其阅读对话将被删除。其中的 {{count}} 份资料仍保留在资料库中。",
+  "Read a document alongside the assistant with cited pages": "和助手一起读文档，逐页标注出处",
+  "Generate math animations or storyboard images with Manim": "用 Manim 生成数学动画或分镜图"
 }
