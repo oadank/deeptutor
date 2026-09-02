@@ -863,7 +863,13 @@ class TurnExecutor:
             # 语音轮次里它既不调 tts_speak 也不写 [[voice]] 块。这里后端兜底：
             # 先让模型把本轮回复改写成一段口语稿（不是朗读正文），再拿口语稿去
             # TTS。模型写块时优先用块。
-            if is_voice_turn and not voice_text and assistant_content.strip():
+            # 模型已经自己调工具出了音频（speech.mp3 之类）就别再补一份，
+            # 否则同一条回复会挂两个语音横幅。
+            already_has_audio = any(
+                str(a.get("mime_type") or "").startswith("audio/")
+                for a in generated_attachments
+            )
+            if is_voice_turn and not voice_text and not already_has_audio and assistant_content.strip():
                 # 网关抽风时改写调用会失败 → 超时 25s + 重试一次；仍失败就不出语音
                 # （绝不朗读正文）。
                 for _attempt in range(2):
