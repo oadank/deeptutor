@@ -1291,7 +1291,11 @@ export const UserMessage = memo(function UserMessage({
             data-turn-bubble="true"
             className="rounded-2xl bg-[var(--secondary)] px-4 py-2.5 text-[14px] leading-relaxed text-[var(--foreground)] shadow-sm"
           >
-            <div className="whitespace-pre-wrap">{msg.content}</div>
+            {/* [local patch 2026-09-02] 语音消息：气泡只显示识别文本，wrapper 前缀
+                （dsh voiceAsText 契约，给 AI 的语音上下文）在展示层剥掉。 */}
+            <div className="whitespace-pre-wrap">
+              {msg.content.replace(/^\[用户发送了一条语音[\s\S]*?识别内容：/, "").replace(/。?请调用 tts_speak[\s\S]*$/, "") || msg.content}
+            </div>
           </div>
         )}
         {!editing && refTreeItems.length > 0 && (

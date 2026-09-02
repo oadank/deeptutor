@@ -516,7 +516,15 @@ export default memo(function ChatComposer({
 
   const doSend = useCallback(
     (content: string) => {
-      onSend(content);
+      // [local patch 2026-09-02] dsh voiceAsText 契约：录音附件在场时，告知 AI 这
+      // 是语音消息（带识别内容），并指示它用 tts_speak 口语化语音回复。
+      const voiceClip = attachments.find(
+        (a) => (a.filename || "").startsWith("voice-") && (a.mimeType || "").startsWith("audio/"),
+      );
+      const finalContent = voiceClip
+        ? `[用户发送了一条语音，识别内容：${content}。请调用 tts_speak 工具，用口语化、简短的语音回复这条消息（不要照抄你的文字回复）；除非用户明确要求文字。]`
+        : content;
+      onSend(finalContent);
       setHasContent(false);
       inputHandleRef.current?.clear();
       // Sending can move focus to the button or rerender the empty-state
@@ -524,7 +532,7 @@ export default memo(function ChatComposer({
       // so the user can keep typing, including after switching back to the tab.
       focusTextarea();
     },
-    [focusTextarea, onSend],
+    [attachments, focusTextarea, onSend],
   );
 
   const hasReferences =
