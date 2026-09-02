@@ -418,7 +418,17 @@ export default memo(function ChatComposer({
     const next = current.trim() ? `${current.trimEnd()} ${text}` : text;
     inputHandleRef.current?.setValue(next);
   }, []);
-  const recorder = useVoiceRecorder(handleTranscript);
+  // [local patch 2026-09-02] 语音横幅：录音作为附件随消息发送（用户侧可回放），
+  // 转写文本照旧进输入框供 AI 阅读。
+  const handleVoiceClip = useCallback(
+    ({ blob, mimeType }: { blob: Blob; mimeType: string; text: string }) => {
+      const ext = mimeType.includes("ogg") ? "ogg" : mimeType.includes("mp4") ? "mp4" : "webm";
+      const stamp = new Date().toISOString().slice(11, 19).replace(/:/g, "");
+      onAddFiles([new File([blob], `voice-${stamp}.${ext}`, { type: mimeType })]);
+    },
+    [onAddFiles],
+  );
+  const recorder = useVoiceRecorder(handleTranscript, handleVoiceClip);
 
   // Composer-row compaction: when the available width drops below ~620 px
   // (e.g. the Viewer panel is open or the user is on a narrow viewport),

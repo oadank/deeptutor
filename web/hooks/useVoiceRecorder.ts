@@ -12,7 +12,16 @@ export type RecorderState = "idle" | "recording" | "transcribing";
  * the clip to ``/api/voice/stt`` (which uses the admin-configured STT
  * provider), and hands the transcript back through ``onTranscript``.
  */
-export function useVoiceRecorder(onTranscript: (text: string) => void) {
+export type VoiceClip = {
+  blob: Blob;
+  mimeType: string;
+  text: string;
+};
+
+export function useVoiceRecorder(
+  onTranscript: (text: string) => void,
+  onClip?: (clip: VoiceClip) => void,
+) {
   const [state, setState] = useState<RecorderState>("idle");
   const [error, setError] = useState<string | null>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
@@ -20,6 +29,8 @@ export function useVoiceRecorder(onTranscript: (text: string) => void) {
   const streamRef = useRef<MediaStream | null>(null);
   const onTranscriptRef = useRef(onTranscript);
   onTranscriptRef.current = onTranscript;
+  const onClipRef = useRef(onClip);
+  onClipRef.current = onClip;
 
   const releaseStream = useCallback(() => {
     streamRef.current?.getTracks().forEach((track) => track.stop());
@@ -83,6 +94,11 @@ export function useVoiceRecorder(onTranscript: (text: string) => void) {
         const data = (await resp.json()) as { text?: string };
         const text = (data.text || "").trim();
         if (text) onTranscriptRef.current(text);
+        // [local patch 2026-09-02] 语音横幅：把原始录音交还调用方（作为附件随
+        // 消息发送，聊天流里渲染为可回放的语音横幅），转写文本照旧进输入框。
+        if (onClipRef.current) {
+          onClipRef.current({ blob, mimeType, text });
+        }
       } catch (err) {
         setError(err instanceof Error ? err.message : "Transcription failed.");
       } finally {

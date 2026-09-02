@@ -1097,6 +1097,14 @@ export const UserMessage = memo(function UserMessage({
   };
 
   // Everything this turn carried — file attachments plus the request
+  // [local patch 2026-09-02] 语音横幅：用户消息里 audio 附件（麦克风录音）
+  // 渲染为可回放横幅，互斥播放；转写文本在下方正文正常显示。
+  const voiceAttachments = (msg.attachments ?? []).filter((a) => {
+    const mime = (a.mime_type || "").toLowerCase();
+    const fn = (a.filename || "").toLowerCase();
+    return mime.startsWith("audio/") || a.type === "audio" || /\.(webm|ogg|mp4|m4a)$/.test(fn);
+  });
+
   // snapshot's Space references — rendered as one collapsed tree under
   // the bubble (the sent-message mirror of the composer's tree).
   const snap = msg.requestSnapshot;
@@ -1288,6 +1296,38 @@ export const UserMessage = memo(function UserMessage({
         )}
         {!editing && refTreeItems.length > 0 && (
           <div className="pr-1">
+            {voiceAttachments.length > 0 && (
+              <div className="mb-1 flex flex-col gap-2">
+                {voiceAttachments.map((a, vi) => {
+                  const mime = (a.mime_type || "").toLowerCase();
+                  const src = mime.startsWith("audio/") ? imageSrcForAttachment(a) : null;
+                  const filename = a.filename || t("Voice message");
+                  return (
+                    <div
+                      key={`voice-${vi}`}
+                      className="w-full max-w-[min(520px,90%)] overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--card)] shadow-sm"
+                    >
+                      <div className="flex items-center gap-2 px-3 pt-2 text-[12.5px] font-medium text-[var(--foreground)]">
+                        <span aria-hidden>🎤</span>
+                        <span>{t("Voice message")}</span>
+                      </div>
+                      {src && (
+                        <audio
+                          src={src}
+                          controls
+                          preload="metadata"
+                          className="block w-full px-2 pt-1"
+                          onPlay={(e) => pauseOtherAudio(e.currentTarget)}
+                        />
+                      )}
+                      <div className="min-w-0 truncate px-3 py-2 text-[11.5px] text-[var(--muted-foreground)]">
+                        {filename}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
             <ContextReferenceTree
               items={refTreeItems}
               direction="down"
