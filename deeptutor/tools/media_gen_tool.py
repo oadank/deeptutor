@@ -272,11 +272,15 @@ class TtsSpeakTool(BaseTool):
         return ToolDefinition(
             name="tts_speak",
             description=(
-                "Speak text out loud to the user: synthesize the given passage with "
-                "the configured text-to-speech engine and attach the audio clip to "
-                "the chat so the user can play it. Use this whenever the user asks "
-                "you to speak / read aloud / send a voice message. Write `text` in "
-                "natural spoken language — it will be read verbatim."
+                "Send a VOICE message to the user: synthesize the given passage "
+                "with the configured text-to-speech engine and attach the audio "
+                "clip to the chat so the user can play it. Use this whenever the "
+                "user asks you to speak / send a voice message (语音/语音消息/说出来). "
+                "CRITICAL: `text` must be a SEPARATELY WRITTEN spoken-language "
+                "version — short, warm, conversational sentences only. NEVER copy "
+                "your written reply, and never include code, formulas, markdown, "
+                "lists or long numbers in it (those are unreadable aloud). Write "
+                "the spoken version as if chatting with a friend."
             ),
             parameters=[
                 ToolParameter(

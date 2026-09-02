@@ -282,6 +282,34 @@ export function GeneratedFileCards({
           );
         }
 
+        // [local patch 2026-09-02] TTS 语音横幅：audio 附件内嵌播放条（语音块场景）。
+        if (mime.startsWith("audio/") && mediaSrc) {
+          return (
+            <div
+              key={key}
+              className="w-full max-w-[min(520px,90%)] overflow-hidden rounded-xl border border-[var(--border)] bg-[var(--card)] shadow-sm"
+            >
+              <div className="flex items-center gap-2 px-3 pt-2 text-[12.5px] font-medium text-[var(--foreground)]">
+                <span aria-hidden>🔊</span>
+                <span>{t("Voice reply")}</span>
+              </div>
+              <audio src={mediaSrc} controls preload="metadata" className="block w-full px-2 pt-1" />
+              <button
+                type="button"
+                onClick={onOpen ? () => onOpen(a) : undefined}
+                className="flex w-full items-center justify-between gap-2 px-3 py-2 text-left transition hover:bg-[var(--muted)]/30"
+              >
+                <span className="min-w-0 truncate text-[11.5px] text-[var(--muted-foreground)]">
+                  {humanizeFilename(filename)}
+                </span>
+                <span className="shrink-0 text-[11px] text-[var(--muted-foreground)]">
+                  {t("Open")}
+                </span>
+              </button>
+            </div>
+          );
+        }
+
         const spec = docIconFor(filename);
         const Icon = spec.Icon;
         const size = formatFileSize(a.size_bytes);
