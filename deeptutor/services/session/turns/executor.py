@@ -984,10 +984,23 @@ class TurnExecutor:
                 # open briefly so the later ``session_meta`` title update can
                 # still arrive.
                 try:
+                    # [local patch 2026-09-02] 标题语言兜底：前端 payload 常缺
+                    # language 字段（旧默认 en 导致中文界面也出英文标题）——
+                    # 缺失时回退读用户界面语言设置。
+                    title_lang = str(payload.get("language") or "")
+                    if not title_lang:
+                        try:
+                            from deeptutor.services.settings.interface_settings import (
+                                get_ui_settings,
+                            )
+
+                            title_lang = str(get_ui_settings().get("language") or "en")
+                        except Exception:
+                            title_lang = "en"
                     await self._maybe_generate_session_title(
                         execution=execution,
                         session_id=session_id,
-                        ui_language=str(payload.get("language", "en") or "en"),
+                        ui_language=title_lang,
                     )
                 except Exception:
                     logger.debug("Failed to generate session title", exc_info=True)
