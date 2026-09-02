@@ -258,4 +258,77 @@ class VideogenTool(BaseTool):
         )
 
 
-__all__ = ["ImagegenTool", "VideogenTool"]
+class TtsSpeakTool(BaseTool):
+    """Speak a passage out loud: synthesize text via the active TTS engine and
+    attach the audio clip to the chat as a playable artifact.
+
+    [local patch 2026-09-02] The chat agent had no way to deliver voice to the
+    user even though TTS was fully configured server-side (the /api/voice/tts
+    route only serves the frontend player). This mirrors ImagegenTool: thin
+    BaseTool over the voice service, bytes land in the turn's public workspace
+    and come back as chat artifacts."""
+
+    def get_definition(self) -> ToolDefinition:
+        return ToolDefinition(
+            name="tts_speak",
+            description=(
+                "Speak text out loud to the user: synthesize the given passage with "
+                "the configured text-to-speech engine and attach the audio clip to "
+                "the chat so the user can play it. Use this whenever the user asks "
+                "you to speak / read aloud / send a voice message. Write `text` in "
+                "natural spoken language — it will be read verbatim."
+            ),
+            parameters=[
+                ToolParameter(
+                    name="text",
+                    type="string",
+                    description="The passage to speak, in natural spoken language.",
+                ),
+                ToolParameter(
+                    name="voice",
+                    type="string",
+                    description=(
+                        "Optional voice override for engines that support it "
+                        "(e.g. a cloned-voice sample id). Omit for the default."
+                    ),
+                    required=False,
+                ),
+            ],
+        )
+
+    async def execute(self, **kwargs: Any) -> ToolResult:
+        from deeptutor.api.routers.voice import _parse_pcm_content_type, _pcm16_to_wav
+        from deeptutor.services.voice import VoiceProviderError, synthesize_speech
+
+        text = str(kwargs.get("text") or "").strip()
+        if not text:
+            return ToolResult(content="tts_speak requires a non-empty 'text'.", success=False)
+        voice = str(kwargs.get("voice") or "").strip() or None
+        try:
+            audio, content_type = await synthesize_speech(text, voice=voice)
+        except ValueError as exc:  # not configured
+            return ToolResult(content=str(exc), success=False)
+        except VoiceProviderError as exc:
+            logger.warning("tts_speak failed: %s", exc)
+            return ToolResult(content=f"Speech synthesis failed: {exc}", success=False)
+
+        # Wrap raw PCM payloads (some adapters stream PCM16) so players accept them.
+        pcm = _parse_pcm_content_type(content_type)
+        if pcm:
+            rate, channels = pcm
+            audio = _pcm16_to_wav(audio, sample_rate=rate, channels=channels)
+            content_type = "audio/wav"
+
+        run_dir = _run_dir(kwargs.get("_workspace_dir"), "tts")
+        artifacts = _write_media(
+            run_dir, [(audio, content_type)], stem=_slug(text, "speech"), default_ext="mp3"
+        )
+        return _artifact_result(
+            artifacts,
+            empty_message="Speech synthesis produced no saved files.",
+            text=text[:200],
+            kind="speech",
+        )
+
+
+__all__ = ["ImagegenTool", "VideogenTool", "TtsSpeakTool"]

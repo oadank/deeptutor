@@ -73,7 +73,7 @@ CHAT_OPTIONAL_TOOLS = default_optional_tools(excluded=CHAT_EXCLUDED_TOOLS)
 # Generation tools are user-toggleable + grant-gated, but only usable once an
 # admin has configured an active model for the service. Drop them from a turn's
 # tool list when unconfigured so the model never sees a tool that can only error.
-_GENERATION_TOOL_SERVICES: dict[str, str] = {"imagegen": "imagegen", "videogen": "videogen"}
+_GENERATION_TOOL_SERVICES: dict[str, str] = {"imagegen": "imagegen", "videogen": "videogen", "tts_speak": "tts"}
 
 
 def _drop_unconfigured_generation_tools(tools: list[str]) -> list[str]:

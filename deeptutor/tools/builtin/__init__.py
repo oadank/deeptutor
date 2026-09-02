@@ -22,7 +22,7 @@ from deeptutor.capabilities.subagent import SUBAGENT_TOOL_TYPES
 from deeptutor.core.tool_protocol import BaseTool, ToolDefinition, ToolParameter, ToolResult
 from deeptutor.knowledge.manifest import KB_FILES_DEFAULT_LIMIT, KB_FILES_MAX_LIMIT
 from deeptutor.tools.exec_tool import ExecTool
-from deeptutor.tools.media_gen_tool import ImagegenTool, VideogenTool
+from deeptutor.tools.media_gen_tool import ImagegenTool, TtsSpeakTool, VideogenTool
 from deeptutor.tools.partner_memory import (
     PARTNER_BUILTIN_TOOL_NAMES,
     PartnerMemorizeTool,
@@ -1747,6 +1747,9 @@ BUILTIN_TOOL_TYPES: tuple[type[BaseTool], ...] = (
     # grant-gated; the chat pipeline only mounts them when a model is configured.
     ImagegenTool,
     VideogenTool,
+    # [local patch 2026-09-02] Text-to-speech delivery: the agent speaks to the
+    # user via the configured TTS engine (audio clip attached as an artifact).
+    TtsSpeakTool,
     # Mastery Path + Solve + Obsidian tools — globally registered so schemas/API
     # stay stable; the chat loop capabilities decide when to auto-mount them for
     # a turn. Obsidian is a knowledge capability: when its vault is selected it
@@ -1814,6 +1817,7 @@ USER_TOGGLEABLE_TOOL_NAMES: tuple[str, ...] = (
     "geogebra_analysis",
     "imagegen",
     "videogen",
+    "tts_speak",
 )
 
 # Built-in tools the chat agent loop auto-mounts under context gates (a KB
@@ -1871,6 +1875,7 @@ __all__ = [
     "KbFilesTool",
     "ImagegenTool",
     "VideogenTool",
+    "TtsSpeakTool",
     "ListNotebookTool",
     "PaperSearchToolWrapper",
     "QuestionBankTool",
