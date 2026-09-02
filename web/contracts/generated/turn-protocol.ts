@@ -171,6 +171,9 @@ export type StreamEventType =
   | "session"
   | "session_meta"
   | "wait_for_input"
+  // [local patch 2026-09-02] injection-style interrupt: mid-turn user message
+  // rides the active turn's event stream so seq numbering stays contiguous.
+  | "user_injection"
   | "done";
 export type OwnerId = string;
 export type ProtocolVersion14 = "2.0";

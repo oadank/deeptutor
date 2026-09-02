@@ -137,7 +137,7 @@ function CapMenuItem({
  * turn — send, working, stop — rather than two buttons that swap places at
  * the moment of the click. These are its four states; only the skin changes.
  */
-type SendState = "idle" | "blocked" | "ready" | "streaming";
+type SendState = "idle" | "blocked" | "ready";
 
 /**
  * `idle` keeps a legible glyph on a hairline ring instead of fading the whole
@@ -163,7 +163,6 @@ const SEND_STATE_CLASS: Record<SendState, string> = {
     "bg-[color-mix(in_srgb,var(--muted-foreground)_30%,transparent)] text-[var(--foreground)] hover:bg-[color-mix(in_srgb,var(--muted-foreground)_45%,transparent)]",
   ready:
     "bg-[var(--primary)] text-[var(--primary-foreground)] ring-[3px] ring-[color-mix(in_srgb,var(--primary)_18%,transparent)] hover:-translate-y-px hover:ring-[5px]",
-  streaming: "bg-[var(--primary)] text-[var(--primary-foreground)]",
 };
 
 export default memo(function ChatComposer({
@@ -539,42 +538,20 @@ export default memo(function ChatComposer({
   // thing that can move it forward is the user's answer. Locking the composer
   // there made the interactive card the ONLY way to answer — and left the
   // learner with no way out at all if the card failed to render.
-  // [local patch 2026-09-02] 插队消息队列：turn 进行中用户发的消息不再被拒，
-  // 而是排队，本轮回复结束（isStreaming 落回 false 且不在等用户答题）后自动
-  // 作为新 turn 逐条发出——同 agents-to-feishu 的排队姿势。
-  const [queuedMessages, setQueuedMessages] = useState<string[]>([]);
-  const prevBusyRef = useRef<boolean>(isStreaming || awaitingUserReply);
-  useEffect(() => {
-    const busyNow = isStreaming || awaitingUserReply;
-    const wasBusy = prevBusyRef.current;
-    prevBusyRef.current = busyNow;
-    if (wasBusy && !busyNow) {
-      setQueuedMessages((queue) => {
-        if (!queue.length) return queue;
-        const [first, ...rest] = queue;
-        queueMicrotask(() => doSend(first));
-        return rest;
-      });
-    }
-  }, [isStreaming, awaitingUserReply, doSend]);
-  const enqueueMessage = useCallback(
-    (content: string) => setQueuedMessages((queue) => [...queue, content]),
-    [],
-  );
+  // [local patch 2026-09-02] 插队注入：turn 进行中的发送直接走后端注入分支
+  // （request_preparer 撞租约 → 注入为 user 消息），前端不再本地排队。
   const streamingBlocksSend = isStreaming && !awaitingUserReply;
-  const canSend = hasIntent && !streamingBlocksSend && !isConfigBlocked;
+  const canSend = hasIntent && !isConfigBlocked;
 
   // `blocked` only exists once there is intent: without it the button stays
   // `idle` so an empty composer doesn't present a live send affordance. That
   // makes intent — not `canSend` — the thing that decides interactivity, so
   // the `blocked` state can stay clickable and surface the config card.
-  const sendState: SendState = streamingBlocksSend
-    ? "streaming"
-    : !hasIntent
-      ? "idle"
-      : isConfigBlocked
-        ? "blocked"
-        : "ready";
+  const sendState: SendState = !hasIntent
+    ? "idle"
+    : isConfigBlocked
+      ? "blocked"
+      : "ready";
 
   const spaceSelectionCounts: SpaceSelectionCounts = {
     attachments: attachments.length,
@@ -703,22 +680,13 @@ export default memo(function ChatComposer({
     doSend(content);
   }, [canSend, doSend, isConfigBlocked, onRequestConfigConfirm]);
 
-  // One button, so one handler: mid-turn the same control cancels — except
-  // while the turn is waiting on the user, where sending IS how it continues.
+  // Mid-turn the main button keeps sending (the backend injects the message
+  // into the running turn); cancelling lives on the separate stop button.
   const handleSendButtonClick = useCallback(() => {
-    if (streamingBlocksSend) {
-      onCancelStreaming();
-      return;
-    }
     handleManualSend();
-  }, [handleManualSend, streamingBlocksSend, onCancelStreaming]);
+  }, [handleManualSend]);
 
-  const sendLabel =
-    sendState === "streaming"
-      ? t("Stop generating")
-      : awaitingUserReply
-        ? t("Send answer")
-        : t("Send");
+  const sendLabel = awaitingUserReply ? t("Send answer") : t("Send");
   const sendTitle =
     sendState === "blocked"
       ? t("Confirm settings on the right to send.")
@@ -774,21 +742,6 @@ export default memo(function ChatComposer({
             tabIndex={-1}
           />
 
-          {queuedMessages.length > 0 && (
-            // [local patch 2026-09-02] 插队队列提示：当前回复结束后逐条自动发送。
-            <div className="mb-1 flex items-center gap-2 rounded-xl border border-[var(--border)]/40 bg-[var(--muted)]/40 px-3 py-1.5 text-xs text-[var(--muted-foreground)]">
-              <span>
-                {t("{{count}} 条插队消息将在当前回复结束后自动发送", { count: queuedMessages.length })}
-              </span>
-              <button
-                type="button"
-                className="ml-auto underline underline-offset-2 hover:text-[var(--foreground)]"
-                onClick={() => setQueuedMessages([])}
-              >
-                {t("清空")}
-              </button>
-            </div>
-          )}
           {contextTreeItems.length > 0 && (
             // The reference zone reads as its own layer: a faint muted band
             // with a hairline against the input area, following the card's
@@ -812,7 +765,7 @@ export default memo(function ChatComposer({
             isVisualizeMode={isVisualizeMode}
             isStreaming={isStreaming}
             canSendEmpty={hasReferences}
-            onSend={streamingBlocksSend ? enqueueMessage : doSend}
+            onSend={doSend}
             onInputChange={handleInputChange}
             onPaste={onPaste}
             connectedAgents={connectedAgents}
@@ -1223,13 +1176,20 @@ export default memo(function ChatComposer({
                   )}
                 </button>
 
-                {/* The thing you press is the thing that's working is the
-                    thing you press to stop — one element for the whole turn,
-                    so the button never swaps out from under the cursor at the
-                    moment of the click. The glyph crossfades arrow→square in
-                    place (both stacked in the same grid cell) and the progress
-                    ring moves to the perimeter, where it can spin without
-                    fighting the square for the same space. */}
+                {/* [local patch 2026-09-02] 独立停止按钮：turn 进行中主按钮
+                    专职发送（后端注入），取消流式回复由它承担。答题等待时
+                    不显示——发答案本身就是推进方式。 */}
+                {streamingBlocksSend && (
+                  <button
+                    type="button"
+                    onClick={onCancelStreaming}
+                    className="group relative ml-1 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[var(--muted-foreground)] ring-1 ring-inset ring-[var(--border)] transition-[background-color,color,transform] duration-150 hover:bg-[var(--muted)]/55 hover:text-[var(--foreground)] active:scale-95"
+                    aria-label={t("Stop generating")}
+                    title={t("Stop generating")}
+                  >
+                    <Square size={10} strokeWidth={2.6} className="fill-current" />
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={handleSendButtonClick}
@@ -1238,29 +1198,7 @@ export default memo(function ChatComposer({
                   aria-label={sendLabel}
                   title={sendTitle}
                 >
-                  {sendState === "streaming" && (
-                    // Outside the fill, so "still working" reads at a glance
-                    // and dims on hover to hand the control back as "stop".
-                    <span className="pointer-events-none absolute -inset-[3px] rounded-full border-2 border-[color-mix(in_srgb,var(--primary)_15%,transparent)] border-t-[var(--primary)] animate-spin transition-opacity group-hover:opacity-30" />
-                  )}
-                  <ArrowUp
-                    size={16}
-                    strokeWidth={2.5}
-                    className={`col-start-1 row-start-1 transition-[opacity,transform] duration-200 ${
-                      sendState === "streaming"
-                        ? "scale-50 opacity-0"
-                        : "scale-100 opacity-100"
-                    }`}
-                  />
-                  <Square
-                    size={10}
-                    strokeWidth={2.6}
-                    className={`col-start-1 row-start-1 fill-current transition-[opacity,transform] duration-200 ${
-                      sendState === "streaming"
-                        ? "scale-100 opacity-100"
-                        : "scale-50 opacity-0"
-                    }`}
-                  />
+                  <ArrowUp size={16} strokeWidth={2.5} />
                 </button>
               </div>
             </div>

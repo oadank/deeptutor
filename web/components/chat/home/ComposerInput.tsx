@@ -354,7 +354,9 @@ export const ComposerInput = memo(
         }
         if (shouldSubmitOnEnter(e, isComposingRef.current)) {
           e.preventDefault();
-          if (!isStreaming) doSend();
+          // [local patch 2026-09-02] 插队注入：turn 进行中 Enter 也直接发送，
+          // 由后端注入到活动 turn，不再被 isStreaming 拦下。
+          doSend();
         } else if (e.key === "Escape") {
           setShowAtPopup(false);
           setShowSlashPopup(false);

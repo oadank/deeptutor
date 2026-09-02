@@ -629,6 +629,26 @@ function reducer(state: ProviderState, action: Action): ProviderState {
       // user's just-sent bubble from view.
       if (!state.sessions[action.key]) return state;
       const session = state.sessions[action.key];
+      // [local patch 2026-09-02] injection-style interrupt: the backend
+      // publishes ``user_injection`` on the ACTIVE turn's stream when a
+      // mid-turn start_turn is injected. The user bubble is already on
+      // screen via the optimistic ADD_USER_MSG, so this event only has to
+      // advance the resume cursor (activeTurnId/lastSeq) — appending it to
+      // the assistant trace would duplicate the message in the UI.
+      if (action.event.type === "user_injection") {
+        return {
+          ...state,
+          sessions: {
+            ...state.sessions,
+            [action.key]: {
+              ...session,
+              activeTurnId: action.event.turn_id || session.activeTurnId,
+              lastSeq: Math.max(session.lastSeq, action.event.seq || 0),
+              updatedAt: Date.now(),
+            },
+          },
+        };
+      }
       const msgs = [...session.messages];
       let last = msgs[msgs.length - 1];
       if (last?.role !== "assistant") {

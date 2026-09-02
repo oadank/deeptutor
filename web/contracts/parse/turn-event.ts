@@ -31,6 +31,10 @@ const STREAM_EVENT_TYPES = new Set<StreamEventType>([
   "session",
   "session_meta",
   "wait_for_input",
+  // [local patch 2026-09-02] injection-style interrupt: must parse (not just
+  // advance diagnostics) — an unparsed mid-stream event would wedge the
+  // client's seq cursor and stall every later event behind the replay probe.
+  "user_injection",
   "done",
 ]);
 

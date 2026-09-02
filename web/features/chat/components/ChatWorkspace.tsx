@@ -1877,16 +1877,17 @@ export default function ChatWorkspace() {
         if (content.trim()) submitUserReply({ text: content });
         return;
       }
+      // [local patch 2026-09-02] 插队注入：turn 进行中也放行，sendMessage
+      // 走 start_turn 由后端注入活动 turn（queued_injection），不再本地拦截。
       if (
-        (!content &&
-          !attachments.length &&
-          !selectedBookReferences.length &&
-          !selectedReadingReferences.length &&
-          !selectedNotebookRecords.length &&
-          !selectedHistorySessions.length &&
-          !selectedQuestionEntries.length &&
-          !selectedMemoryFiles.length) ||
-        state.isStreaming
+        !content &&
+        !attachments.length &&
+        !selectedBookReferences.length &&
+        !selectedReadingReferences.length &&
+        !selectedNotebookRecords.length &&
+        !selectedHistorySessions.length &&
+        !selectedQuestionEntries.length &&
+        !selectedMemoryFiles.length
       )
         return;
 
@@ -2030,7 +2031,6 @@ export default function ChatWorkspace() {
       selectedQuestionEntries.length,
       sendMessage,
       shouldAutoScrollRef,
-      state.isStreaming,
       subagentBudget,
       submitUserReply,
       t,
