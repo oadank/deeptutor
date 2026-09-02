@@ -202,13 +202,13 @@ class VideogenTool(BaseTool):
                 ToolParameter(
                     name="aspect_ratio",
                     type="string",
-                    description="Optional aspect ratio like '16:9' or '9:16'. Omit for the default.",
+                    description="Optional aspect ratio like '16:9' (default) or '9:16' for vertical/phone videos. Pass it when the user asks for a specific orientation.",
                     required=False,
                 ),
                 ToolParameter(
                     name="duration",
                     type="string",
-                    description="Optional duration in seconds (e.g. '5'). Omit for the default.",
+                    description="Optional duration in seconds (default '5', keep under 10). Pass it when the user asks for a specific length.",
                     required=False,
                 ),
             ],

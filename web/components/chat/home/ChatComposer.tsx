@@ -539,6 +539,28 @@ export default memo(function ChatComposer({
   // thing that can move it forward is the user's answer. Locking the composer
   // there made the interactive card the ONLY way to answer — and left the
   // learner with no way out at all if the card failed to render.
+  // [local patch 2026-09-02] 插队消息队列：turn 进行中用户发的消息不再被拒，
+  // 而是排队，本轮回复结束（isStreaming 落回 false 且不在等用户答题）后自动
+  // 作为新 turn 逐条发出——同 agents-to-feishu 的排队姿势。
+  const [queuedMessages, setQueuedMessages] = useState<string[]>([]);
+  const prevBusyRef = useRef<boolean>(isStreaming || awaitingUserReply);
+  useEffect(() => {
+    const busyNow = isStreaming || awaitingUserReply;
+    const wasBusy = prevBusyRef.current;
+    prevBusyRef.current = busyNow;
+    if (wasBusy && !busyNow) {
+      setQueuedMessages((queue) => {
+        if (!queue.length) return queue;
+        const [first, ...rest] = queue;
+        queueMicrotask(() => doSend(first));
+        return rest;
+      });
+    }
+  }, [isStreaming, awaitingUserReply, doSend]);
+  const enqueueMessage = useCallback(
+    (content: string) => setQueuedMessages((queue) => [...queue, content]),
+    [],
+  );
   const streamingBlocksSend = isStreaming && !awaitingUserReply;
   const canSend = hasIntent && !streamingBlocksSend && !isConfigBlocked;
 
@@ -752,6 +774,21 @@ export default memo(function ChatComposer({
             tabIndex={-1}
           />
 
+          {queuedMessages.length > 0 && (
+            // [local patch 2026-09-02] 插队队列提示：当前回复结束后逐条自动发送。
+            <div className="mb-1 flex items-center gap-2 rounded-xl border border-[var(--border)]/40 bg-[var(--muted)]/40 px-3 py-1.5 text-xs text-[var(--muted-foreground)]">
+              <span>
+                {t("{{count}} 条插队消息将在当前回复结束后自动发送", { count: queuedMessages.length })}
+              </span>
+              <button
+                type="button"
+                className="ml-auto underline underline-offset-2 hover:text-[var(--foreground)]"
+                onClick={() => setQueuedMessages([])}
+              >
+                {t("清空")}
+              </button>
+            </div>
+          )}
           {contextTreeItems.length > 0 && (
             // The reference zone reads as its own layer: a faint muted band
             // with a hairline against the input area, following the card's
@@ -775,7 +812,7 @@ export default memo(function ChatComposer({
             isVisualizeMode={isVisualizeMode}
             isStreaming={isStreaming}
             canSendEmpty={hasReferences}
-            onSend={doSend}
+            onSend={streamingBlocksSend ? enqueueMessage : doSend}
             onInputChange={handleInputChange}
             onPaste={onPaste}
             connectedAgents={connectedAgents}

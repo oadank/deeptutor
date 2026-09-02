@@ -17,6 +17,9 @@ import ChatSpaceMenu, {
   type ChatSpaceSelectionCounts,
 } from "@/components/chat/space/ChatSpaceMenu";
 import { agentGlyph } from "@/components/agents/agent-icons";
+
+// [local patch 2026-09-02] 聊天输入草稿持久化 key（切页/刷新不丢输入）
+const COMPOSER_DRAFT_KEY = "deeptutor:composer-draft";
 import { shouldSubmitOnEnter } from "@/lib/composer-keyboard";
 import { useAutoSizedTextarea } from "@/lib/use-auto-sized-textarea";
 import { useImeComposing } from "@/lib/use-ime-composing";
@@ -170,7 +173,15 @@ export const ComposerInput = memo(
     ref,
   ) {
     const { t } = useTranslation();
-    const [input, setInput] = useState("");
+    // [local patch 2026-09-02] 持久化草稿：切页/刷新不丢输入。所有写入都走
+    // setInputBoth（含发送后清空），恢复只在首次挂载读一次。
+    const [input, setInput] = useState(() => {
+        try {
+            return window.localStorage.getItem(COMPOSER_DRAFT_KEY) ?? "";
+        } catch {
+            return "";
+        }
+    });
     const [showAtPopup, setShowAtPopup] = useState(false);
     const [showSlashPopup, setShowSlashPopup] = useState(false);
     const [atQuery, setAtQuery] = useState("");
@@ -200,6 +211,12 @@ export const ComposerInput = memo(
     const setInputBoth = useCallback((value: string) => {
       inputRef.current = value;
       setInput(value);
+      try {
+          if (value === "") window.localStorage.removeItem(COMPOSER_DRAFT_KEY);
+          else window.localStorage.setItem(COMPOSER_DRAFT_KEY, value);
+      } catch {
+          // 隐私模式/配额异常时静默降级为纯内存草稿
+      }
     }, []);
 
     useImperativeHandle(
