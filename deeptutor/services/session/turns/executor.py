@@ -855,10 +855,11 @@ class TurnExecutor:
                 assistant_content = (
                     assistant_content.replace(voice_match.group(0), "").strip()
                 )
-            if (
-                str(payload.get("content") or "").startswith("[用户发送了一条语音")
-                and voice_text
-            ):
+            turn_content = str(payload.get("content") or "")
+            is_voice_turn = turn_content.startswith("[用户发送了一条语音") or turn_content.startswith(
+                "[语音消息]"
+            )
+            if is_voice_turn and voice_text:
                 try:
                     from deeptutor.services.sandbox.artifacts import (
                         collect_public_artifacts,

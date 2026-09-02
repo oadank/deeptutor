@@ -1183,7 +1183,10 @@ export const UserMessage = memo(function UserMessage({
   // [local patch 2026-09-02] 语音消息：剥壳转写（dsh voiceAsText wrapper 只给 AI）
   const isVoiceMessage = voiceAttachments.length > 0;
   const voiceTranscript =
-    msg.content.replace(/^\[用户发送了一条语音[\s\S]*?识别内容：/, "").replace(/。?请调用 tts_speak[\s\S]*$/, "") || msg.content;
+    msg.content
+      .replace(/^\[用户发送了一条语音[\s\S]*?识别内容：/, "")
+      .replace(/^\[语音消息\]\s*/, "")
+      .replace(/。?请调用 tts_speak[\s\S]*$/, "") || msg.content;
 
   // snapshot's Space references — rendered as one collapsed tree under
   // the bubble (the sent-message mirror of the composer's tree).
