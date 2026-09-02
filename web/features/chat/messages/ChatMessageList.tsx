@@ -293,7 +293,13 @@ export function GeneratedFileCards({
                 <span aria-hidden>🔊</span>
                 <span>{t("Voice reply")}</span>
               </div>
-              <audio src={mediaSrc} controls preload="metadata" className="block w-full px-2 pt-1" />
+              <audio
+                src={mediaSrc}
+                controls
+                preload="metadata"
+                className="block w-full px-2 pt-1"
+                onPlay={(e) => pauseOtherAudio(e.currentTarget)}
+              />
               <button
                 type="button"
                 onClick={onOpen ? () => onOpen(a) : undefined}
@@ -706,6 +712,20 @@ function CostFooter({
 
 // Claude-style icon-only message action: a quiet 15px glyph with the label
 // in an instant tooltip, brightening on hover.
+// [local patch 2026-09-02] 全局音频互斥：同一时刻只允许一个语音在播
+// （覆盖挂 DOM 的横幅 <audio> 和不挂 DOM 的 new Audio() 喇叭朗读）。
+export function pauseOtherAudio(current: HTMLAudioElement) {
+  const w = window as typeof window & { __dtActiveAudio?: HTMLAudioElement };
+  if (w.__dtActiveAudio && w.__dtActiveAudio !== current) {
+    try {
+      w.__dtActiveAudio.pause();
+    } catch {
+      // ignore
+    }
+  }
+  w.__dtActiveAudio = current;
+}
+
 export function RoughActionButton({
   icon: Icon,
   label,
@@ -836,6 +856,7 @@ export function PlayAudioButton({
       urlRef.current = url;
       const audio = new Audio(url);
       audioRef.current = audio;
+      pauseOtherAudio(audio);
       audio.onended = () => {
         setState("idle");
         cleanup();
