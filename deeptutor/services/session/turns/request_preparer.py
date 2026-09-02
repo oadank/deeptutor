@@ -612,6 +612,25 @@ class TurnRequestPreparer:
         content = str(payload.get("content") or "").strip()
         if not content:
             return None
+        # [local patch 2026-09-03] ask_user 等待答复中的 turn：文本按"用户答复"
+        # 走 reply 队列唤醒它（等价 submit_user_reply），而不是当插队事件写进
+        # 事件流——否则反问永远等不到唤醒，界面表现为提交卡死。
+        if str(active.get("status") or "") == "waiting_input" and self.coordinator is not None:
+            await self.coordinator.submit_command(
+                active["id"],
+                "submit_user_reply",
+                {"text": content, "answers": []},
+            )
+            logger.info(
+                "Relayed mid-wait message as user reply to turn %s (session %s)",
+                active["id"],
+                session["id"],
+            )
+            return session, {
+                "id": active["id"],
+                "status": "running",
+                "queued_injection": True,
+            }
         dropped = sorted(
             key
             for key in ("attachments", "references", "notebook_references", "book_references")
