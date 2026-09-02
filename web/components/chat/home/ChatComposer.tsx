@@ -522,7 +522,7 @@ export default memo(function ChatComposer({
         (a) => (a.filename || "").startsWith("voice-") && (a.mimeType || "").startsWith("audio/"),
       );
       const finalContent = voiceClip
-        ? `[用户发送了一条语音，识别内容：${content}。回复规则：①正常写你的文字回复；②在回复的最末尾另起一行，输出一个语音块，格式：[[voice]]把你这段回复的口语化版本写在这里[[/voice]]。语音块里像跟朋友聊天一样说话，简短自然温暖，绝不包含代码/公式/markdown/列表/长数字——它是单独说给用户听的，不是朗读正文。每次回复都必须带这个语音块，系统会把它转成语音播放给用户。]`
+        ? `[用户发送了一条语音，识别内容：${content}。回复规则：①正常写你的文字回复；②在回复的最末尾另起一行，输出一个语音块，格式：[[voice]]把你这段回复的口语化版本写在这里[[/voice]]。语音块里像跟朋友聊天一样说话，简短自然温暖，绝不包含代码/公式/markdown/列表/长数字——它是单独说给用户听的，不是朗读正文。每次回复都必须带这个语音块，系统会自动把它转成语音横幅播放给用户。③你的文字回复里绝对不要提语音文件、文件名（如 speech.mp3）、播放说明或"我已经回了语音"之类的话——横幅自动出现，文字回复直接继续聊正题。]`
         : content;
       onSend(finalContent);
       setHasContent(false);

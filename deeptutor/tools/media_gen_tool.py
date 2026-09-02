@@ -280,7 +280,11 @@ class TtsSpeakTool(BaseTool):
                 "version — short, warm, conversational sentences only. NEVER copy "
                 "your written reply, and never include code, formulas, markdown, "
                 "lists or long numbers in it (those are unreadable aloud). Write "
-                "the spoken version as if chatting with a friend."
+                "the spoken version as if chatting with a friend. The audio "
+                "banner appears in the chat automatically — do NOT mention the "
+                "audio file, its filename, playback instructions, or phrases "
+                "like 'I have sent you a voice message' in your written reply. "
+                "Your written reply just continues the conversation normally."
             ),
             parameters=[
                 ToolParameter(
