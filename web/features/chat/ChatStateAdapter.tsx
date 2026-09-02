@@ -338,7 +338,9 @@ function createSessionEntry(
     llmSelection: null,
     masteryPathId: null,
     courseId: "",
-    personaSelection: "",
+    // [local patch 2026-09-02] 全局默认人格：新会话一律默认「暴躁老青鱼」。
+    // 用户在对话里手动切换/清除后按会话记忆走；课程若设 default_persona 仍优先。
+    personaSelection: "暴躁老青鱼",
     messages: [],
     isStreaming: false,
     currentStage: "",
