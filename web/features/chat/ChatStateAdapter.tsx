@@ -585,7 +585,24 @@ function reducer(state: ProviderState, action: Action): ProviderState {
       // Chain the placeholder assistant onto whatever message currently
       // sits at the tip — this is normally the user row just added by
       // ADD_USER_MSG (possibly an optimistic negative id during an edit).
-      const tip = existing.length > 0 ? existing[existing.length - 1] : null;
+      // [local patch 2026-09-02] Mid-turn injection replays/continues the ACTIVE
+      // turn's event stream while a streaming placeholder bubble already exists —
+      // reusing it keeps the injected reply in the SAME bubble (otherwise it
+      // reads as a brand-new chat).
+      const streamingPlaceholder =
+        existing.length > 0 && session.isStreaming
+          ? existing[existing.length - 1]
+          : null;
+      const reusable =
+        streamingPlaceholder &&
+        streamingPlaceholder.role === "assistant" &&
+        typeof streamingPlaceholder.id === "number" &&
+        streamingPlaceholder.id < 0
+          ? streamingPlaceholder
+          : null;
+      const tip =
+        reusable ??
+        (existing.length > 0 ? existing[existing.length - 1] : null);
       return {
         ...state,
         sessions: {
@@ -594,17 +611,19 @@ function reducer(state: ProviderState, action: Action): ProviderState {
             ...session,
             isStreaming: true,
             status: "running",
-            messages: [
-              ...existing,
-              {
-                id: nextOptimisticId(),
-                role: "assistant",
-                content: "",
-                events: [],
-                capability: session.activeCapability || "",
-                parentMessageId: tip?.id ?? null,
-              },
-            ],
+            messages: reusable
+              ? existing
+              : [
+                  ...existing,
+                  {
+                    id: nextOptimisticId(),
+                    role: "assistant",
+                    content: "",
+                    events: [],
+                    capability: session.activeCapability || "",
+                    parentMessageId: tip?.id ?? null,
+                  },
+                ],
             updatedAt: Date.now(),
           },
         },
