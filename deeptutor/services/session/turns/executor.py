@@ -859,6 +859,34 @@ class TurnExecutor:
             is_voice_turn = turn_content.startswith("[用户发送了一条语音") or turn_content.startswith(
                 "[语音消息]"
             )
+            # [local patch 2026-09-03] 模型会"嘴上说语音发你了但什么都没发"——实测
+            # 语音轮次里它既不调 tts_speak 也不写 [[voice]] 块。这里后端兜底：
+            # 先让模型把本轮回复改写成一段口语稿（不是朗读正文），再拿口语稿去
+            # TTS。模型写块时优先用块。
+            if is_voice_turn and not voice_text and assistant_content.strip():
+                try:
+                    from deeptutor.services.llm import stream as llm_stream
+
+                    rewrite_prompt = (
+                        "把下面这段助手回复改写成一小段可以直接念出来的口语稿。"
+                        "要求：2-4 句，像跟朋友聊天，短句，不要 markdown、不要代码、"
+                        "不要列表、不要括号注释、不要长串数字，只输出口语稿本身。\n\n"
+                        f"助手回复：\n{assistant_content[:1200]}"
+                    )
+                    buf: list[str] = []
+                    async for chunk in llm_stream(
+                        prompt=rewrite_prompt,
+                        system_prompt="你是口语化改写助手，只输出口语稿。",
+                        temperature=0.4,
+                        max_tokens=220,
+                    ):
+                        buf.append(chunk)
+                    spoken = "".join(buf).strip().strip('"').strip("'").strip()
+                    if spoken and not spoken.startswith("{"):
+                        voice_text = spoken
+                        logger.info("voice-reply fallback: spoken script %d chars", len(spoken))
+                except Exception:
+                    logger.debug("voice-reply spoken rewrite failed", exc_info=True)
             if is_voice_turn and voice_text:
                 try:
                     from deeptutor.services.sandbox.artifacts import (
