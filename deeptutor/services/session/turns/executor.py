@@ -963,8 +963,10 @@ class TurnExecutor:
                     # 是"我说了让它回语音，它没回"。走与工具路径同一套 SOURCES
                     # 事件，前端实时+刷新两侧都能渲染。
                     if voice_reply_attachments:
-                        from deeptutor.core.stream import StreamEvent, StreamEventType
-
+                        # 顶层已 import StreamEvent/StreamEventType（第 14 行），
+                        # 此处禁止再局部 import——会把名字变成函数局部变量，
+                        # 普通轮次（无语音）走到后面 pending_done_event 的
+                        # StreamEvent(...) 就 UnboundLocalError（2026-09-03 实测）。
                         sources_event = StreamEvent(
                             type=StreamEventType.SOURCES,
                             source="chat",
