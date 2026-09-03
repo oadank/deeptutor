@@ -1364,6 +1364,12 @@ export function ChatStateAdapterProvider({
               message.parent_message_id === undefined
                 ? null
                 : message.parent_message_id,
+            // [local patch 2026-09-03] 保留后端 created_at（秒级 epoch），供
+            // 聊天时间戳显示；这一层是白名单映射，漏了它消息就没有时间。
+            createdAt:
+              typeof (message as { created_at?: number }).created_at === "number"
+                ? (message as { created_at?: number }).created_at
+                : null,
             ...(requestSnapshot ? { requestSnapshot } : {}),
           };
         });

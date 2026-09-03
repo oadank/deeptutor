@@ -1813,12 +1813,13 @@ export const ChatMessageList = memo(function ChatMessageList({
                   </div>
                 )}
                 {(() => {
-                  // [local patch 2026-09-03] 消息时间戳：聊天里原来只显示
-                  // cost/tokens/calls 这类没用的统计，换成发送时间。
+                  // [local patch 2026-09-03] 消息时间戳。拿不到真实时间就
+                  // 什么都不显示——绝不能退回"当前时间"（会变成刷新时间）。
                   const raw =
                     msg.createdAt ??
                     (msg as { created_at?: number }).created_at ??
-                    Date.now() / 1000;
+                    null;
+                  if (raw == null) return null;
                   return (
                     <div className="ml-auto">
                       <MessageTime value={raw} />
