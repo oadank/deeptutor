@@ -1211,12 +1211,17 @@ export const UserMessage = memo(function UserMessage({
     return mime.startsWith("audio/") || a.type === "audio" || /\.(webm|ogg|mp4|m4a)$/.test(fn);
   });
   // [local patch 2026-09-02] 语音消息：剥壳转写（dsh voiceAsText wrapper 只给 AI）
+  // [local patch 2026-09-03] 剥壳后为空（ASR 空转写）就传空串——VoiceBanner
+  // 自然回落显示 label（"语音消息"）。之前 `|| msg.content` 兜底会把
+  // 「[语音消息]」标记原文顶到横幅上，正是老大骂的"语音前面带括号前缀"。
   const isVoiceMessage = voiceAttachments.length > 0;
-  const voiceTranscript =
-    msg.content
-      .replace(/^\[用户发送了一条语音[\s\S]*?识别内容：/, "")
-      .replace(/^\[语音消息\]\s*/, "")
-      .replace(/。?请调用 tts_speak[\s\S]*$/, "") || msg.content;
+  const voiceTranscript = isVoiceMessage
+    ? msg.content
+        .replace(/^\[用户发送了一条语音[\s\S]*?识别内容：/, "")
+        .replace(/^\[语音消息\]\s*/, "")
+        .replace(/。?请调用 tts_speak[\s\S]*$/, "")
+        .trim()
+    : msg.content;
 
   // snapshot's Space references — rendered as one collapsed tree under
   // the bubble (the sent-message mirror of the composer's tree).
