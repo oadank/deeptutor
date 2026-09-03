@@ -147,7 +147,9 @@ class LocalDiskAttachmentStore:
         data: bytes,
         mime_type: str = "",
     ) -> str:
-        del mime_type  # not needed for local disk
+        is_audio = mime_type.lower().startswith("audio/") or filename.lower().endswith(
+            (".mp4", ".m4a", ".webm", ".ogg", ".wav")
+        )
         stored = self._stored_filename(attachment_id, filename)
         target = self._safe_join(session_id, stored)
         if target is None:
@@ -163,7 +165,26 @@ class LocalDiskAttachmentStore:
         sid = quote(_coerce_filename(session_id), safe="")
         aid = quote(attachment_id, safe="")
         name = quote(_coerce_filename(filename), safe="")
-        return f"{_PUBLIC_URL_PREFIX}/{sid}/{aid}/{name}"
+        public_url = f"{_PUBLIC_URL_PREFIX}/{sid}/{aid}/{name}"
+
+        # [local patch 2026-09-03] 语音附件转 mp3 播放副本（本质修复"要点两次才
+        # 能播放"）：手机录音 mp4 的 moov atom 在文件尾部，浏览器流式播放首次必
+        # 败（iOS Safari 还忽略预加载），第二次点击时全量已缓存才成功。mp3 流式
+        # 友好、全浏览器兼容。转码失败不阻塞上传，退回原 URL。
+        if is_audio:
+            # [2026-09-03] 转码必须同步等完再返回 URL——后台跑的话前端立刻加载
+            # mp3 会 404（"done 之后才完成的后台任务等于没做"）。语音片段小，
+            # 转码 1~2 秒，可接受。
+            await loop.run_in_executor(None, self._make_playable_copy_sync, target)
+
+            stem = target.name.rsplit(".", 1)[0]
+            mp3_name = f"{stem}.mp3"
+            mp3_target = self._safe_join(session_id, mp3_name)
+            if mp3_target is not None and mp3_target.is_file() and mp3_target.stat().st_size > 256:
+                mp3_url = f"{_PUBLIC_URL_PREFIX}/{sid}/{aid}/{quote(mp3_name, safe='')}"
+                return mp3_url
+
+        return public_url
 
     @staticmethod
     def _write_sync(target: Path, data: bytes) -> None:
@@ -181,6 +202,31 @@ class LocalDiskAttachmentStore:
                     tmp.unlink()
                 except OSError:
                     pass
+
+    @staticmethod
+    def _make_playable_copy_sync(target: Path) -> None:
+        """Transcribe *target* (a recorded voice clip) to a same-stem ``.mp3``.
+
+        Best-effort: any failure leaves the original file in place and simply
+        skips the copy — playback then falls back to today's behaviour.
+        """
+        import shutil
+        import subprocess
+
+        ffmpeg = shutil.which("ffmpeg") or r"C:\Users\oadan\AppData\Local\Microsoft\WinGet\Links\ffmpeg.exe"
+        if not ffmpeg:
+            return
+        mp3 = target.with_suffix(".mp3")
+        if mp3.exists():
+            return
+        try:
+            subprocess.run(
+                [ffmpeg, "-y", "-loglevel", "error", "-i", str(target), "-q:a", "4", str(mp3)],
+                capture_output=True,
+                timeout=120,
+            )
+        except Exception:
+            return
 
     async def delete_session(self, session_id: str) -> None:
         session_dir = self._session_dir(session_id)
