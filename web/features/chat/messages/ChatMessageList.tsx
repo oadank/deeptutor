@@ -740,7 +740,13 @@ function VoiceBanner({
       audio.pause();
     } else {
       pauseOtherAudio(audio);
-      void audio.play().catch(() => setPlaying(false));
+      // [2026-09-03 修] 语音文件（手机录音 mp4，moov 在尾部）首次点击时数据往往
+      // 还没缓冲够，play() 静默失败——用户必须点第二次。捕获后延迟重试一次。
+      audio.play().catch(() => {
+        setTimeout(() => {
+          audio.play().catch(() => setPlaying(false));
+        }, 400);
+      });
     }
   };
 
@@ -806,7 +812,9 @@ function VoiceBanner({
       <audio
         ref={audioRef}
         src={src ?? undefined}
-        preload="metadata"
+        // [2026-09-03 修] metadata → auto：语音文件小（几十~几百 KB），挂载即预取，
+        // 否则首次点击时才开始拉数据 + mp4 moov 在尾部 → 第一次播放必失败。
+        preload="auto"
         className="hidden"
         onPlay={() => setPlaying(true)}
         onPause={() => setPlaying(false)}
