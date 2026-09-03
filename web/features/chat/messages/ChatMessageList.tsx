@@ -773,18 +773,14 @@ function VoiceBanner({
       <span className="shrink-0 text-[11px] font-medium text-[var(--muted-foreground)]">
         {seconds === null ? "" : `${seconds}s`}
       </span>
-      {/* [local patch 2026-09-03] 口语稿完整显示（不截断）：AI 写的这段
-          语音内容必须能直接读到，悬停才能看等于没有。 */}
-      <div className="flex flex-col justify-center">
-        <span
-          // [local patch 2026-09-03] 口语稿最多显示 3 行（再长会顶出屏幕），
-          // 悬停看全文、点复制拿全文。
-          className="line-clamp-3 break-words text-[12.5px] leading-snug text-[var(--foreground)]"
-          title={transcript || label}
-        >
-          {transcript || label}
-        </span>
-      </div>
+      {/* [local patch 2026-09-03] 对齐 dsh 横幅：口语稿**单行**显示，超出
+          部分省略；悬停看全文（title），点复制按钮拿全文。 */}
+      <span
+        className="min-w-0 flex-1 truncate text-[12.5px] text-[var(--foreground)]"
+        title={transcript || label}
+      >
+        {transcript || label}
+      </span>
       {transcript && (
         <button
           type="button"
