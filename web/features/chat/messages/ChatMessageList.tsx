@@ -288,7 +288,13 @@ export function GeneratedFileCards({
         if (mime.startsWith("audio/") && mediaSrc) {
           return (
             <div key={key} className="w-full max-w-[min(520px,90%)]">
-              <VoiceBanner src={mediaSrc} label="语音回复" />
+              {/* transcript = AI 自己写的口语稿（后端合成时存进附件的），
+                  必须传进来横幅才会显示这段文字 + 复制按钮 */}
+              <VoiceBanner
+                src={mediaSrc}
+                label="语音回复"
+                transcript={a.transcript}
+              />
             </div>
           );
         }
@@ -727,19 +733,25 @@ function VoiceBanner({
   };
 
   const copyTranscript = () => {
-    if (!transcript || !onCopy) return;
-    void Promise.resolve(onCopy(transcript)).then(() => {
+    // [local patch 2026-09-03] 没有外部回调时直接用剪贴板 API，
+    // 保证复制按钮在任何调用点都能用。
+    if (!transcript) return;
+    const done = () => {
       setCopied(true);
-      if (timerRef.current) clearTimeout(timerRef.current);
-      timerRef.current = setTimeout(() => setCopied(false), 1600);
-    });
+      window.setTimeout(() => setCopied(false), 1500);
+    };
+    if (onCopy) {
+      void Promise.resolve(onCopy(transcript)).then(done);
+      return;
+    }
+    void navigator.clipboard?.writeText(transcript).then(done).catch(() => {});
   };
 
   return (
     <div
       // [local patch 2026-09-02] 对齐 dsh TtsVoiceCard：44px 高 pill、28px 圆形
       // 播放钮、inline-flex 自适应宽度（transcript 有则显示、无则纯 pill）。
-      className="inline-flex max-w-[min(520px,90%)] items-center gap-2 h-11 rounded-[22px] border border-[var(--border)] bg-[var(--secondary)] pl-2 pr-4 shadow-sm"
+      className="inline-flex min-h-11 max-w-[min(520px,90%)] items-center gap-2 rounded-2xl border border-[var(--border)] bg-[var(--secondary)] px-3 py-2 shadow-sm"
     >
       <button
         type="button"
@@ -761,10 +773,19 @@ function VoiceBanner({
       <span className="shrink-0 text-[11px] font-medium text-[var(--muted-foreground)]">
         {seconds === null ? "" : `${seconds}s`}
       </span>
-      <span className="min-w-0 flex-1 truncate text-[12.5px] text-[var(--foreground)]" title={transcript || label}>
-        {transcript || label}
-      </span>
-      {transcript && onCopy && (
+      {/* [local patch 2026-09-03] 口语稿完整显示（不截断）：AI 写的这段
+          语音内容必须能直接读到，悬停才能看等于没有。 */}
+      <div className="flex flex-col justify-center">
+        <span
+          // [local patch 2026-09-03] 口语稿最多显示 3 行（再长会顶出屏幕），
+          // 悬停看全文、点复制拿全文。
+          className="line-clamp-3 break-words text-[12.5px] leading-snug text-[var(--foreground)]"
+          title={transcript || label}
+        >
+          {transcript || label}
+        </span>
+      </div>
+      {transcript && (
         <button
           type="button"
           onClick={copyTranscript}
