@@ -50,6 +50,36 @@ export function extractStreamedArtifacts(
 ): MessageAttachment[] {
   const out: MessageAttachment[] = [];
   for (const ev of events ?? []) {
+    // [local patch 2026-09-03] sources 事件也携带 artifact（语音兜底路径不发
+    // tool_result，只广播 SOURCES——不解析它，语音横幅实时对话中永远不出现）。
+    if (ev.type === "sources") {
+      const meta = (ev.metadata ?? {}) as {
+        sources?: Array<Record<string, unknown>>;
+      };
+      for (const s of meta.sources ?? []) {
+        if (!s || typeof s !== "object") continue;
+        const url = typeof s.url === "string" ? s.url : "";
+        if (!url) continue;
+        if (s.type !== "artifact") continue;
+        const mime = typeof s.mime_type === "string" ? s.mime_type : "";
+        const transcript =
+          typeof s.transcript === "string" ? s.transcript : undefined;
+        out.push({
+          type: mime.startsWith("image/")
+            ? "image"
+            : mime.startsWith("audio/")
+              ? "audio"
+              : "document",
+          filename: typeof s.filename === "string" ? s.filename : "",
+          url,
+          mime_type: mime,
+          size_bytes: typeof s.size_bytes === "number" ? s.size_bytes : undefined,
+          ...(transcript ? { transcript } : {}),
+          generated: true,
+        });
+      }
+      continue;
+    }
     if (ev.type !== "tool_result") continue;
     const meta = (ev.metadata ?? {}) as {
       tool_metadata?: {
@@ -58,19 +88,26 @@ export function extractStreamedArtifacts(
           url?: string;
           mime_type?: string;
           size_bytes?: number;
+          transcript?: string;
         }>;
       };
     };
     for (const a of meta.tool_metadata?.artifacts ?? []) {
       if (!a?.url) continue;
-      out.push({
-        type: a.mime_type?.startsWith("image/") ? "image" : "document",
+      const attachment: MessageAttachment = {
+        type: a.mime_type?.startsWith("image/")
+          ? "image"
+          : a.mime_type?.startsWith("audio/")
+            ? "audio"
+            : "document",
         filename: a.filename,
         url: a.url,
         mime_type: a.mime_type,
         size_bytes: a.size_bytes,
         generated: true,
-      });
+      };
+      if (a.transcript) attachment.transcript = a.transcript;
+      out.push(attachment);
     }
   }
   return out;

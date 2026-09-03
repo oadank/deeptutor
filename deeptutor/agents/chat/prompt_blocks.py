@@ -75,18 +75,29 @@ class ChatPromptAssembler:
             # [local patch 2026-09-02] 语音消息规则（一次注入，不随消息重复）：
             # 用户语音消息以「[语音消息]」开头，回复时末尾写 [[voice]] 口语块，
             # 系统自动转成语音横幅。详见 executor 的 voice-block 解析。
+            # [local patch 2026-09-03] 扩展到"用户用文字要求发语音"场景，并加
+            # 铁律：本轮没有真实产出语音（工具成功或写了 [[voice]] 块）就绝不
+            # 声称"语音发你了"——实测模型会嘴硬，用户一句都听不到。
             PromptBlock(
                 "voice_policy",
-                "Voice-message rules: a user message starting with "
-                "「[语音消息]」 was spoken via microphone (the rest is its "
-                "transcript). When replying to such a message: 1) write your "
-                "normal text reply; 2) at the very end, append a voice block on "
-                "its own line — [[voice]]a short, warm, conversational version "
-                "of this reply, spoken as if to a friend[[/voice]] — with NO "
-                "code, formulas, markdown, lists or long numbers inside; the "
-                "system converts it to a voice banner automatically. 3) Never "
-                "mention audio files, filenames, or playback instructions in "
-                "the written reply.",
+                "Voice rules (two cases):\n"
+                "(a) A user message starting with 「[语音消息]」 was spoken via "
+                "microphone (the rest is its transcript). Reply normally, then "
+                "append a voice block on its own line at the very end — "
+                "[[voice]]a short, warm, conversational version of this reply, "
+                "spoken as if to a friend[[/voice]] — with NO code, formulas, "
+                "markdown, lists or long numbers inside.\n"
+                "(b) The user asks IN TEXT for a voice reply (e.g. 发语音/回个"
+                "语音/说给我听/用语音回答): if the tts_speak tool is available, "
+                "CALL it with a short spoken-language passage (2-4 conversational "
+                "sentences, never your written reply verbatim); if it is not "
+                "available, append the [[voice]]...[[/voice]] block instead.\n"
+                "HARD RULE: never claim you sent a voice message unless a voice "
+                "was actually produced this turn (tts_speak succeeded, or you "
+                "wrote the [[voice]] block). Saying 「语音给你了」 without one is "
+                "a serious failure. Never read your full written reply aloud, "
+                "and never mention audio files, filenames, or playback "
+                "instructions in the written reply.",
             ),
         ]
         # Capability playbooks sit high so they frame the whole turn when active;

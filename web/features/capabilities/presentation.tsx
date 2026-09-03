@@ -30,7 +30,8 @@ export type ToolName =
   | "reason"
   | "paper_search"
   | "imagegen"
-  | "videogen";
+  | "videogen"
+  | "tts_speak";
 
 export interface ToolDef {
   name: ToolName;
@@ -47,6 +48,8 @@ export const ALL_TOOLS: ToolDef[] = [
   { name: "paper_search", label: "Arxiv Search", icon: FileSearch },
   { name: "imagegen", label: "Image Gen", icon: ImageIcon },
   { name: "videogen", label: "Video Gen", icon: Clapperboard },
+  // [local patch 2026-09-03] 语音回复工具（见 CHAT_CAPABILITIES 里 chat 的 allow-list）
+  { name: "tts_speak", label: "Voice Reply", icon: Sparkles },
 ];
 
 export interface CapabilityDef {
@@ -82,6 +85,10 @@ export const CHAT_CAPABILITIES: ChatCapabilityDef[] = [
       "paper_search",
       "imagegen",
       "videogen",
+      // [local patch 2026-09-03] tts_speak 必须在 allow-list 里：composer 的
+      // enabledTools = 用户开关集 ∩ 这里，缺了它文字请求发语音时模型根本没有
+      // 这个工具 → 嘴上说"语音发你了"实际什么都没发。
+      "tts_speak",
     ],
     defaultTools: [],
   },

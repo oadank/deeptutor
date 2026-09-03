@@ -70,16 +70,27 @@ def artifact_attachments(event: StreamEvent) -> list[dict[str, Any]]:
         if not url:
             continue
         mime = str(entry.get("mime_type") or "")
-        attachments.append(
-            {
-                "type": "image" if mime.startswith("image/") else "document",
-                "filename": str(entry.get("filename") or "file"),
-                "mime_type": mime,
-                "url": url,
-                "size_bytes": entry.get("size_bytes"),
-                "generated": True,
-            }
-        )
+        # [local patch 2026-09-03] 音频 artifact（tts_speak / 语音兜底）必须以
+        # type="audio" 落库，且口语文本 transcript 原样透传——前端语音横幅靠
+        # transcript 显示 AI 自写的口语稿（缺了它横幅只剩光秃秃的播放条）。
+        attachment: dict[str, Any] = {
+            "type": (
+                "image"
+                if mime.startswith("image/")
+                else "audio"
+                if mime.startswith("audio/")
+                else "document"
+            ),
+            "filename": str(entry.get("filename") or "file"),
+            "mime_type": mime,
+            "url": url,
+            "size_bytes": entry.get("size_bytes"),
+            "generated": True,
+        }
+        transcript = str(entry.get("transcript") or "").strip()
+        if transcript:
+            attachment["transcript"] = transcript
+        attachments.append(attachment)
     return attachments
 
 

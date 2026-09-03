@@ -946,6 +946,43 @@ class TurnExecutor:
                         len(voice_reply_attachments),
                         len(voice_text),
                     )
+                    # [local patch 2026-09-03] 兜底语音必须实时广播：附件只落库
+                    # 的话，流式期间前端拿不到（前端从 tool_result/sources 事件
+                    # 提取 artifact），用户不刷新就永远看不到横幅——实测表现就
+                    # 是"我说了让它回语音，它没回"。走与工具路径同一套 SOURCES
+                    # 事件，前端实时+刷新两侧都能渲染。
+                    if voice_reply_attachments:
+                        from deeptutor.core.stream import StreamEvent, StreamEventType
+
+                        sources_event = StreamEvent(
+                            type=StreamEventType.SOURCES,
+                            source="chat",
+                            content="",
+                            metadata={
+                                "sources": [
+                                    {
+                                        "type": "artifact",
+                                        "filename": att["filename"],
+                                        "url": att["url"],
+                                        "mime_type": att["mime_type"],
+                                        "size_bytes": att["size_bytes"],
+                                        "transcript": att.get("transcript", ""),
+                                    }
+                                    for att in voice_reply_attachments
+                                ],
+                                "trace_kind": "sources",
+                            },
+                        )
+                        try:
+                            published = await self._publish_live_event(
+                                execution, sources_event
+                            )
+                            assistant_events.append(published)
+                        except Exception:
+                            logger.warning(
+                                "voice-reply sources event publish failed",
+                                exc_info=True,
+                            )
                 except Exception:
                     logger.warning("voice-reply TTS failed", exc_info=True)
 
