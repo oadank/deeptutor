@@ -859,6 +859,16 @@ class TurnExecutor:
             is_voice_turn = turn_content.startswith("[用户发送了一条语音") or turn_content.startswith(
                 "[语音消息]"
             )
+            # [local patch 2026-09-03] dsh-web 同款双通道触发（移植自
+            # @oadank/dsh-input-tools 的 voiceRequestProvider）：用户用**文字**
+            # 要求语音回复时同样兜底——模型不自觉也照出语音。dsh 实测"不漏"靠的
+            # 就是这个服务端钩子，不是提示词。
+            _VOICE_REQUEST_RE = re.compile(
+                r"用语音回|回个语音|发个语音|发语音|用语音说|语音回我|语音告诉我"
+                r"|念给我|语音播报|语音回复|用语音回答|说给我听|发条语音|语音发我",
+                re.IGNORECASE,
+            )
+            voice_requested = bool(_VOICE_REQUEST_RE.search(turn_content))
             # [local patch 2026-09-03] 模型会"嘴上说语音发你了但什么都没发"——实测
             # 语音轮次里它既不调 tts_speak 也不写 [[voice]] 块。这里后端兜底：
             # 先让模型把本轮回复改写成一段口语稿（不是朗读正文），再拿口语稿去
@@ -869,7 +879,8 @@ class TurnExecutor:
                 str(a.get("mime_type") or "").startswith("audio/")
                 for a in generated_attachments
             )
-            if is_voice_turn and not voice_text and not already_has_audio and assistant_content.strip():
+            voice_turn = is_voice_turn or voice_requested
+            if voice_turn and not voice_text and not already_has_audio and assistant_content.strip():
                 # 网关抽风时改写调用会失败 → 超时 25s + 重试一次；仍失败就不出语音
                 # （绝不朗读正文）。
                 for _attempt in range(2):
@@ -903,7 +914,7 @@ class TurnExecutor:
                     except Exception:
                         logger.warning("voice-reply spoken rewrite attempt failed", exc_info=True)
                         await asyncio.sleep(1)
-            if is_voice_turn and voice_text:
+            if voice_turn and voice_text:
                 try:
                     from deeptutor.services.voice import synthesize_speech
                     # [local patch 2026-09-03] 必须走 tool 同一套落盘路径：
