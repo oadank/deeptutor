@@ -229,7 +229,9 @@ class RAGService:
         def emit(event):
             if should_skip_noisy_retrieve_log(event):
                 return None
-            return self._emit_tool_event(
+            # [2026-09-03 修] 直接调度而非返回裸协程：logging 回调可能来自任意
+            # 线程/上下文，裸协程无人 await 会刷 RuntimeWarning（实测）。
+            coro = self._emit_tool_event(
                 event_sink,
                 "raw_log",
                 event.message,
@@ -241,6 +243,15 @@ class RAGService:
                     **event.context,
                 },
             )
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = None
+            if loop is not None:
+                asyncio.ensure_future(coro, loop=loop)
+            elif target_loop and target_loop.is_running():
+                asyncio.run_coroutine_threadsafe(coro, target_loop)
+            return None
 
         class _NamedRawLogHandler(logging.Handler):
             def __init__(self) -> None:
