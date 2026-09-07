@@ -18,6 +18,7 @@ import uuid
 
 from deeptutor.services.subagent.base import OnEvent, SubagentBackend
 from deeptutor.services.subagent.config import BackendConfig
+from deeptutor.services.subagent.credentials import ark_key, deepseek_key
 from deeptutor.services.subagent.process import (
     not_found_detail,
     probe_version,
@@ -39,6 +40,24 @@ logger = logging.getLogger(__name__)
 
 _HEADLESS_REASONING = "dsh: reasoning:"
 
+# ACP route (preferred, mirroring the agents-to-feishu dsh bot): one long-lived
+# ``acp-demo`` process against the harness checkout, driven over JSON-RPC. The
+# one-shot headless profile it replaces exits 0 silently on this box, and the
+# npm ``dsh`` shim needs a PATH entry the NSSM service does not carry.
+_ACP_CHECKOUT = Path(
+    os.environ.get("DEEPTUTOR_DSH_ACP_HOME") or r"C:\D\opt\deepseek-harness\deepseek-harness"
+)
+_ACP_CONFIG = Path(
+    os.environ.get("DEEPTUTOR_DSH_ACP_CONFIG") or Path.home() / ".dsh" / "dsh-bot" / "cordis.yml"
+)
+
+
+def _acp_ready() -> bool:
+    return (
+        (_ACP_CHECKOUT / "packages" / "examples" / "acp-demo" / "src" / "bin.ts").is_file()
+        and _ACP_CONFIG.is_file()
+    )
+
 
 class DeepSeekHarnessBackend(SubagentBackend):
     kind = "deepseek_harness"
@@ -48,23 +67,14 @@ class DeepSeekHarnessBackend(SubagentBackend):
     async def detect(self) -> DetectResult:
         ok, text = await probe_version([self.cli_command, "--version"])
         sdk = _sdk_available()
+        acp = _acp_ready()
         return DetectResult(
             kind=self.kind,
             display_name=self.display_name,
-            available=ok or sdk,
-            version=text if ok else ("Python SDK" if sdk else ""),
-            detail="" if ok or sdk else not_found_detail(text, "dsh CLI / Python SDK not found"),
+            available=ok or sdk or acp,
+            version=text if ok else ("Python SDK" if sdk else ("ACP" if acp else "")),
+            detail="" if ok or sdk or acp else not_found_detail(text, "dsh CLI / Python SDK not found"),
         )
-
-    def _build_headless_command(
-        self, question: str, *, config: BackendConfig, images: list[str] | None = None
-    ) -> list[str]:
-        prompt = question
-        if config.system_prompt.strip():
-            prompt = f"{config.system_prompt.strip()}\n\n{question}"
-        if images:
-            prompt += "\n\nAttached local files:\n" + "\n".join(f"- {path}" for path in images)
-        return [self.cli_command, "--profile", "headless", *config.extra_args, prompt]
 
     async def consult(
         self,
@@ -78,6 +88,15 @@ class DeepSeekHarnessBackend(SubagentBackend):
         partner_id: str | None = None,  # noqa: ARG002 — partner-only
     ) -> ConsultResult:
         config = config or BackendConfig()
+        if _acp_ready():
+            return await self._consult_acp(
+                question,
+                on_event=on_event,
+                cwd=cwd,
+                session_id=session_id,
+                config=config,
+                images=images,
+            )
         if _sdk_available():
             return await self._consult_sdk(
                 question,
@@ -90,6 +109,138 @@ class DeepSeekHarnessBackend(SubagentBackend):
         return await self._consult_headless(
             question, on_event=on_event, cwd=cwd, config=config, images=images
         )
+
+    async def _consult_acp(
+        self,
+        question: str,
+        *,
+        on_event: OnEvent,
+        cwd: str | None,
+        session_id: str | None,
+        config: BackendConfig,
+        images: list[str] | None,
+    ) -> ConsultResult:
+        from deeptutor.services.subagent.acp_client import AcpError, get_shared
+
+        result = ConsultResult(session_id=session_id)
+
+        async def emit(
+            kind: str, text: str, raw: dict[str, Any], meta: dict[str, Any] | None = None
+        ) -> None:
+            result.event_count += 1
+            await on_event(SubagentEvent(kind=kind, text=text, raw=raw, meta=meta or {}))
+
+        prompt = question
+        if config.system_prompt.strip() and not session_id:
+            prompt = f"{config.system_prompt.strip()}\n\n{question}"
+        if images:
+            prompt += "\n\nAttached local files:\n" + "\n".join(f"- {path}" for path in images)
+
+        text_chunks: list[str] = []
+
+        async def on_update(update: dict[str, Any]) -> None:
+            kind = str(update.get("sessionUpdate") or "")
+            content = update.get("content") if isinstance(update.get("content"), dict) else {}
+            if kind == "agent_message_chunk" and str(content.get("type") or "") == "text":
+                delta = str(content.get("text") or "")
+                if delta:
+                    # The ACP agents emit the streaming delta AND then the full
+                    # message as a second chunk — keep cumulative, never duplicate.
+                    current = "".join(text_chunks)
+                    if delta == current:
+                        return
+                    if current and delta.startswith(current):
+                        text_chunks.clear()
+                        text_chunks.append(delta)
+                    else:
+                        text_chunks.append(delta)
+                    await emit(
+                        EVENT_TEXT,
+                        "".join(text_chunks).strip(),
+                        update,
+                        {"merge_id": "deepseek:acp:text"},
+                    )
+            elif kind == "agent_thought_chunk" and str(content.get("type") or "") == "text":
+                await emit(
+                    EVENT_REASONING,
+                    str(content.get("text") or ""),
+                    update,
+                    {"merge_id": "deepseek:acp:rsn"},
+                )
+            elif kind in ("tool_call", "tool_call_update"):
+                name = str(update.get("title") or "tool")
+                raw_input = update.get("rawInput")
+                detail = raw_input if isinstance(raw_input, str) else str(raw_input or "")
+                await emit(EVENT_TOOL, f"{name}({detail[:160]})", update)
+
+        env = {}
+        # Only inject non-empty credentials — an empty value would clobber a
+        # real user-level variable through the os.environ merge in spawn.
+        if deepseek_key():
+            env["DEEPSEEK_API_KEY"] = deepseek_key()
+        if ark_key():
+            env["ARK_API_KEY"] = ark_key()
+        env["DSH_PERMISSION_MODE"] = "danger-full-access"
+        env["DSH_HOME"] = _dsh_home()
+        try:
+            proc = await get_shared(
+                self.kind,
+                command="node",
+                args=[
+                    "--import",
+                    "tsx/esm",
+                    str(_ACP_CHECKOUT / "packages" / "examples" / "acp-demo" / "src" / "bin.ts"),
+                    "--config",
+                    str(_ACP_CONFIG),
+                ],
+                cwd=str(_ACP_CHECKOUT),
+                env=env,
+            )
+            sid = session_id or ""
+            async with proc.lock:
+                for attempt in (0, 1):
+                    try:
+                        if not sid:
+                            sid = await proc.session_new(cwd or str(_ACP_CHECKOUT))
+                        await proc.prompt(sid, prompt, on_update=on_update)
+                        break
+                    except AcpError:
+                        if attempt or not session_id or sid != session_id:
+                            raise
+                        # a respawned ACP process invalidated the old session — start fresh
+                        sid = ""
+                        result.session_id = ""
+        except AcpError as exc:
+            result.success = False
+            result.error = str(exc)
+            await emit(EVENT_ERROR, str(exc), {})
+            return result
+        except Exception as exc:  # pragma: no cover - defensive process boundary
+            logger.warning("deepseek ACP consult failed: %s", exc, exc_info=True)
+            result.success = False
+            result.error = str(exc)
+            await emit(EVENT_ERROR, str(exc), {})
+            return result
+
+        result.session_id = sid
+        final_text = "".join(text_chunks).strip()
+        if not final_text:
+            result.success = False
+            result.error = "dsh ACP returned no answer text"
+            await emit(EVENT_ERROR, result.error, {})
+            return result
+        result.final_text = final_text
+        return result
+
+    def _build_headless_command(
+        self, question: str, *, config: BackendConfig, images: list[str] | None = None
+    ) -> list[str]:
+        prompt = question
+        if config.system_prompt.strip():
+            prompt = f"{config.system_prompt.strip()}\n\n{question}"
+        if images:
+            prompt += "\n\nAttached local files:\n" + "\n".join(f"- {path}" for path in images)
+        return [self.cli_command, "--profile", "headless", *config.extra_args, prompt]
 
     async def _consult_headless(
         self,

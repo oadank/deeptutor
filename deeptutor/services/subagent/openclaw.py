@@ -1,29 +1,33 @@
-"""OpenClaw backend — run one persistent Gateway-backed agent turn.
+"""OpenClaw backend — one persistent agent turn over ACP.
 
-The official ``openclaw agent --json`` command reserves stdout for one final
-Gateway response and sends diagnostics to stderr.  A DeepTutor-owned explicit
-session key makes follow-up consults deterministic; operators can add
-``--local`` through ``extra_args`` when they prefer the embedded runtime.
+Speaks the Agent Client Protocol (``openclaw acp``) — the same long-lived
+surface the agents-to-feishu bridge runs in production — instead of the
+one-shot ``openclaw agent --json`` gateway path. The gateway daemon proved
+fragile on this deployment (its supervisor task is disabled and its port is
+taken by tailscaled), while ACP needs no daemon at all. Consults reuse the
+agent's session across calls: the ACP session id rides in
+``ConsultResult.session_id``, so a follow-up consult continues the same
+conversation.
 """
 
 from __future__ import annotations
 
-import json
+import asyncio
 import logging
+import os
+from pathlib import Path
 from typing import Any
-import uuid
 
+from deeptutor.services.subagent.acp_client import AcpError, get_shared
 from deeptutor.services.subagent.base import OnEvent, SubagentBackend
 from deeptutor.services.subagent.config import BackendConfig
-from deeptutor.services.subagent.process import (
-    not_found_detail,
-    probe_version,
-    stream_process_lines,
-)
+from deeptutor.services.subagent.process import not_found_detail, probe_version
 from deeptutor.services.subagent.types import (
     EVENT_ERROR,
     EVENT_LOG,
+    EVENT_REASONING,
     EVENT_TEXT,
+    EVENT_TOOL,
     ConsultResult,
     DetectResult,
     SubagentEvent,
@@ -31,52 +35,42 @@ from deeptutor.services.subagent.types import (
 
 logger = logging.getLogger(__name__)
 
+_STATE_DIR = Path(os.environ.get("DEEPTUTOR_OPENCLAW_STATE_DIR") or Path.home() / ".openclaw")
+_EXEC = Path(os.environ.get("DEEPTUTOR_OPENCLAW_EXEC") or Path.home() / "AppData/Roaming/npm/openclaw.exe")
+
+
+def _spawn_spec() -> tuple[str, list[str], str] | None:
+    if _EXEC.is_file():
+        return str(_EXEC), ["acp"], str(_STATE_DIR)
+    return None
+
 
 class OpenClawBackend(SubagentBackend):
     kind = "openclaw"
     display_name = "OpenClaw"
     cli_command = "openclaw"
 
+    def __init__(self) -> None:
+        self._consult_lock = asyncio.Lock()
+
     async def detect(self) -> DetectResult:
         ok, text = await probe_version([self.cli_command, "--version"])
+        detail = "" if ok else not_found_detail(text, "openclaw CLI not found on PATH")
+        if not ok and _spawn_spec() is not None:
+            return DetectResult(
+                kind=self.kind,
+                display_name=self.display_name,
+                available=True,
+                version="",
+                detail="ACP entry available (CLI not on PATH)",
+            )
         return DetectResult(
             kind=self.kind,
             display_name=self.display_name,
             available=ok,
             version=text if ok else "",
-            detail="" if ok else not_found_detail(text, "openclaw CLI not found on PATH"),
+            detail=detail,
         )
-
-    def _build_command(
-        self,
-        question: str,
-        *,
-        session_id: str,
-        fresh_session: bool,
-        config: BackendConfig,
-        images: list[str] | None = None,
-    ) -> list[str]:
-        prompt = question
-        if config.system_prompt.strip() and fresh_session:
-            prompt = f"{config.system_prompt.strip()}\n\n{question}"
-        if images:
-            prompt += "\n\nAttached local files:\n" + "\n".join(f"- {path}" for path in images)
-        cmd = [
-            self.cli_command,
-            "agent",
-            "--session-key",
-            session_id,
-            "--json",
-            "--timeout",
-            "0",
-        ]
-        if config.model:
-            cmd += ["--model", config.model]
-        if config.effort:
-            cmd += ["--thinking", config.effort]
-        cmd += list(config.extra_args)
-        cmd += ["--message", prompt]
-        return cmd
 
     async def consult(
         self,
@@ -86,112 +80,101 @@ class OpenClawBackend(SubagentBackend):
         cwd: str | None = None,
         session_id: str | None = None,
         config: BackendConfig | None = None,
-        images: list[str] | None = None,
-        partner_id: str | None = None,  # noqa: ARG002 — partner-only
+        images: list[str] | None = None,  # noqa: ARG002 — ACP text prompt only for now
+        partner_id: str | None = None,  # noqa: ARG002 — partner-only; ignored here
     ) -> ConsultResult:
         config = config or BackendConfig()
-        fresh_session = not session_id
-        sid = session_id or f"deeptutor-{uuid.uuid4().hex}"
-        cmd = self._build_command(
-            question,
-            session_id=sid,
-            fresh_session=fresh_session,
-            config=config,
-            images=images,
-        )
-        result = ConsultResult(session_id=sid)
-        stdout_lines: list[str] = []
-        returncode = "0"
+        spec = _spawn_spec()
+        if spec is None:
+            result = ConsultResult(session_id=session_id)
+            result.success = False
+            result.error = "openclaw executable not found (DEEPTUTOR_OPENCLAW_EXEC / npm openclaw.exe)"
+            await on_event(SubagentEvent(kind=EVENT_ERROR, text=result.error, raw={}))
+            return result
 
-        async def emit(kind: str, text: str, raw: dict[str, Any]) -> None:
+        command, args, state_dir = spec
+        result = ConsultResult(session_id=session_id)
+
+        async def emit(kind: str, text: str, raw: dict[str, Any], meta: dict[str, Any] | None = None) -> None:
             result.event_count += 1
-            await on_event(SubagentEvent(kind=kind, text=text, raw=raw))
+            await on_event(SubagentEvent(kind=kind, text=text, raw=raw, meta=meta or {}))
+
+        prompt = question
+        if config.system_prompt.strip() and not session_id:
+            prompt = f"{config.system_prompt.strip()}\n\n{question}"
+
+        text_chunks: list[str] = []
+
+        async def on_update(update: dict[str, Any]) -> None:
+            kind = str(update.get("sessionUpdate") or "")
+            content = update.get("content") if isinstance(update.get("content"), dict) else {}
+            if kind == "agent_message_chunk" and str(content.get("type") or "") == "text":
+                delta = str(content.get("text") or "")
+                if delta:
+                    # The ACP agents emit the streaming delta AND then the full
+                    # message as a second chunk — keep cumulative, never duplicate.
+                    current = "".join(text_chunks)
+                    if delta == current:
+                        return
+                    if current and delta.startswith(current):
+                        text_chunks.clear()
+                        text_chunks.append(delta)
+                    else:
+                        text_chunks.append(delta)
+                    await emit(
+                        EVENT_TEXT,
+                        "".join(text_chunks).strip(),
+                        update,
+                        {"merge_id": "openclaw:text"},
+                    )
+            elif kind == "agent_thought_chunk" and str(content.get("type") or "") == "text":
+                await emit(EVENT_REASONING, str(content.get("text") or ""), update, {"merge_id": "openclaw:rsn"})
+            elif kind in ("tool_call", "tool_call_update"):
+                title = str(update.get("title") or "tool")
+                raw_input = update.get("rawInput")
+                detail = raw_input if isinstance(raw_input, str) else str(raw_input or "")
+                await emit(EVENT_TOOL, f"{title}({detail[:160]})", update)
 
         try:
-            async for channel, line in stream_process_lines(cmd, cwd=cwd):
-                if channel == "exit":
-                    returncode = line
-                elif channel == "stderr":
-                    if line.strip():
-                        await emit(EVENT_LOG, line, {"stream": "stderr"})
-                else:
-                    stdout_lines.append(line)
+            async with self._consult_lock:
+                proc = await get_shared(
+                    self.kind, command=command, args=args, cwd=state_dir,
+                    env={"OPENCLAW_STATE_DIR": state_dir},
+                )
+                sid = session_id or ""
+                for attempt in (0, 1):
+                    try:
+                        if not sid:
+                            sid = await proc.session_new(cwd or state_dir)
+                        await proc.prompt(sid, prompt, on_update=on_update)
+                        break
+                    except AcpError:
+                        if attempt or sid != session_id or not session_id:
+                            raise
+                        # a respawned ACP process invalidated the old session — start fresh
+                        sid = ""
+                        result.session_id = ""
+        except AcpError as exc:
+            result.success = False
+            result.error = str(exc)
+            await emit(EVENT_ERROR, str(exc), {})
+            return result
         except Exception as exc:  # pragma: no cover - defensive process boundary
             logger.warning("openclaw consult failed: %s", exc, exc_info=True)
             result.success = False
             result.error = str(exc)
+            await emit(EVENT_ERROR, str(exc), {})
+            return result
+
+        result.session_id = sid
+        final_text = "".join(text_chunks).strip()
+        if not final_text:
+            result.success = False
+            result.error = "openclaw ACP returned no answer text"
             await emit(EVENT_ERROR, result.error, {})
             return result
-
-        raw_stdout = "\n".join(stdout_lines).strip()
-        payload = _parse_json(raw_stdout)
-        if payload is None:
-            result.success = False
-            result.error = (
-                f"openclaw exited with code {returncode}"
-                if returncode != "0"
-                else "openclaw did not return valid JSON"
-            )
-            if raw_stdout:
-                await emit(EVENT_LOG, raw_stdout, {"stream": "stdout"})
-            await emit(EVENT_ERROR, result.error, {"returncode": returncode})
-            return result
-
-        text = _response_text(payload)
-        status = str(payload.get("status") or "").lower()
-        explicit_failure = payload.get("ok") is False or (
-            bool(status) and status not in {"ok", "success", "completed"}
-        )
-        if returncode != "0" or explicit_failure:
-            result.success = False
-            result.error = _response_error(payload) or f"openclaw exited with code {returncode}"
-            await emit(EVENT_ERROR, result.error, payload)
-        elif not text:
-            result.success = False
-            result.error = _response_error(payload) or "openclaw returned no reply"
-            await emit(EVENT_ERROR, result.error, payload)
-        else:
-            result.final_text = text
-            await emit(EVENT_TEXT, text, payload)
+        result.final_text = final_text
         return result
-
-
-def _parse_json(text: str) -> dict[str, Any] | None:
-    if not text:
-        return None
-    try:
-        value = json.loads(text)
-    except (TypeError, ValueError):
-        return None
-    return value if isinstance(value, dict) else None
-
-
-def _response_text(payload: dict[str, Any]) -> str:
-    result = payload.get("result") if isinstance(payload.get("result"), dict) else payload
-    payloads = result.get("payloads") if isinstance(result, dict) else None
-    if isinstance(payloads, list):
-        parts = [
-            str(item.get("text") or "").strip()
-            for item in payloads
-            if isinstance(item, dict) and item.get("text")
-        ]
-        if parts:
-            return "\n\n".join(parts)
-    for key in ("final", "text", "response", "output"):
-        value = result.get(key) if isinstance(result, dict) else None
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-    return ""
-
-
-def _response_error(payload: dict[str, Any]) -> str:
-    error = payload.get("error")
-    if isinstance(error, dict) and error.get("message"):
-        return str(error["message"])
-    if isinstance(error, str) and error.strip():
-        return error.strip()
-    summary = payload.get("summary")
-    return str(summary).strip() if isinstance(summary, str) else ""
 
 
 __all__ = ["OpenClawBackend"]
