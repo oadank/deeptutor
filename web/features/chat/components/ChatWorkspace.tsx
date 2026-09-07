@@ -2215,6 +2215,7 @@ export default function ChatWorkspace() {
         <SubagentTabWatcher
           messages={state.messages}
           viewerPanelRef={viewerPanelRef}
+          autoOpen={state.isStreaming}
         />
         <div className="relative h-full overflow-hidden">
           {/* The video panel slides in from the left and the chat column shrinks to
@@ -2669,9 +2670,16 @@ function GeogebraTabBridge({
 function SubagentTabWatcher({
   messages,
   viewerPanelRef,
+  autoOpen,
 }: {
   messages: { events?: StreamEvent[] }[];
   viewerPanelRef: React.MutableRefObject<SessionViewerPanelHandle | null>;
+  /**
+   * 是否允许自动聚焦 + 弹出面板。只有当前轮次正在流式（真的在跑 claude）时才为
+   * true；打开历史会话回放时为 false——否则一打开旧会话，面板就自己全屏弹出来
+   * 盖住聊天记录（手机上面板是 max-md:!w-full）。[2026-09-04 修]
+   */
+  autoOpen: boolean;
 }) {
   useEffect(() => {
     // Group by turn so all of one turn's consults (DeepTutor may ask the agent
@@ -2697,9 +2705,11 @@ function SubagentTabWatcher({
       }
     }
     for (const [key, group] of groups) {
-      viewerPanelRef.current?.openSubagentTab(key, group.label, group.events);
+      viewerPanelRef.current?.openSubagentTab(key, group.label, group.events, {
+        autoOpen,
+      });
     }
-  }, [messages, viewerPanelRef]);
+  }, [messages, viewerPanelRef, autoOpen]);
   return null;
 }
 

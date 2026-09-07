@@ -1128,6 +1128,7 @@ function hydrateMessageAttachments(
         extracted_text: item.extracted_text,
         generated: item.generated,
         size_bytes: item.size_bytes,
+        transcript: item.transcript, // [2026-09-03 修] 白名单漏了它——语音横幅只剩"语音回复"4字
       }))
     : [];
 }

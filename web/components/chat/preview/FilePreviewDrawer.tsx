@@ -204,6 +204,9 @@ export default function FilePreviewDrawer({
     <div
       role="dialog"
       aria-hidden={!visible}
+      // [2026-09-03 修] 与 SessionViewerPanel 同款：常驻挂载 + 仅移出屏幕时，
+      // 内部聚焦元素会触发 aria-hidden 警告，且 Tab 会跑进屏幕外的控件。
+      inert={!visible}
       aria-label={t("File preview: {{name}}", { name: filename })}
       // Full-screen sheet below the drawer breakpoint, matching
       // SessionViewerPanel — a 92vw overlay on a phone is an awkward

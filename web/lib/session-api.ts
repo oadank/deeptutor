@@ -20,6 +20,8 @@ export interface SessionMessage {
     extracted_text?: string;
     generated?: boolean;
     size_bytes?: number;
+    /** [2026-09-03] TTS 语音横幅口语稿（AI 自写口语版），横幅内显示+复制。 */
+    transcript?: string;
   }>;
   metadata?: Record<string, unknown>;
   created_at: number;

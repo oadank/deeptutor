@@ -183,8 +183,20 @@ export interface SessionViewerPanelHandle {
   ): void;
   /** Opens (or focuses) an interactive GeoGebra applet tab. */
   openGeogebraTab(payload: GeogebraTabPayload): void;
-  /** Opens (first time) or live-updates a connected subagent's run tab. */
-  openSubagentTab(callId: string, label: string, events: StreamEvent[]): void;
+  /**
+   * Opens (first time) or live-updates a connected subagent's run tab.
+   *
+   * `opts.autoOpen === false` 时**只建/更新标签，不抢焦点也不弹面板**——历史会话
+   * 回放会遍历到旧的 subagent 事件，若不加以区分，打开一个「以前问过 claude 的
+   * 会话」面板就会自己弹出来盖住聊天（手机上面板是全屏 max-md:!w-full，等于
+   * 必须先关掉面板才能看到对话）。只有真正在跑的轮次（isStreaming）才自动弹。
+   */
+  openSubagentTab(
+    callId: string,
+    label: string,
+    events: StreamEvent[],
+    opts?: { autoOpen?: boolean },
+  ): void;
   /** Opens the panel and switches to the Activity home (where the
    *  capability-config card lives). */
   focusActivityHome(): void;
@@ -527,7 +539,7 @@ function SessionViewerPanelInner(
   // events, so live streaming never yanks the user off whatever they're viewing.
   const subagentSeenRef = useRef<Set<string>>(new Set());
   const openSubagentTab = useCallback(
-    (callId: string, label: string, events: StreamEvent[]) => {
+    (callId: string, label: string, events: StreamEvent[], opts?: { autoOpen?: boolean }) => {
       const id = subagentTabIdFor(callId);
       const isNew = !subagentSeenRef.current.has(callId);
       subagentSeenRef.current.add(callId);
@@ -541,7 +553,8 @@ function SessionViewerPanelInner(
         }
         return [...prev, tab];
       });
-      if (isNew) {
+      // [2026-09-04 修] 只有真正在跑的轮次才抢焦点+弹面板；回放历史时静默建标签。
+      if (isNew && opts?.autoOpen !== false) {
         setActiveTabId(id);
         onAutoOpen();
       }
@@ -639,10 +652,16 @@ function SessionViewerPanelInner(
      (`max-md:!w-full`) rather than `useDevice()` so it is right on the first
      paint and follows an orientation change for free — the var-driven width
      and its drag handle stay desktop-only machinery. */
+  // [2026-09-03 修] 关闭态必须 inert：面板常驻挂载，只靠 translate-x-full 移出屏幕，
+  // 里面残留的聚焦元素（如标签栏的关闭按钮）会同时造成两个问题——
+  // ①Chrome 报 "Blocked aria-hidden on an element because its descendant retained focus"；
+  // ②更实际的：键盘 Tab 会跑进看不见的控件里，焦点被困在屏幕外。
+  // inert 一次解决两者（React 19 起支持布尔值写法）。
   return (
     <div
       role="dialog"
       aria-hidden={!visible}
+      inert={!visible}
       className={`fixed right-0 top-0 z-[30] flex h-dvh flex-col border-l border-[var(--border)] bg-[var(--card)] transition-transform ease-out max-md:!w-full md:max-w-[92vw] ${
         // shadow-2xl only while visible — when closed, translate-x-full moves
         // the box off-screen but its blurred shadow still bleeds ~38px back
