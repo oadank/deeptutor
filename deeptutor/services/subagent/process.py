@@ -56,6 +56,30 @@ ProcessLine = tuple[str, str]
 
 _TERMINATE_GRACE_SECONDS = 5.0
 
+# asyncio's StreamReader drops lines past its 64KB default with an unrecoverable
+# ``ValueError`` — and stream-json banner lines (session hooks dumping whole
+# runbooks, big MCP manifests) blow past that on the first message. Cap at 8MB
+# and, below that, drain oversized lines in chunks instead of dying silently:
+# a dead stdout pump reads as "agent said nothing", which the model then
+# "fixes" by re-consulting until the budget burns.
+_STREAM_LINE_LIMIT = 8 * 1024 * 1024
+
+
+async def _read_line(stream: asyncio.StreamReader) -> bytes:
+    """One newline-terminated line, tolerating lines past the reader limit."""
+    try:
+        return await stream.readline()
+    except ValueError:
+        chunks: list[bytes] = []
+        while True:
+            chunk = await stream.read(64 * 1024)
+            if not chunk:
+                break
+            chunks.append(chunk)
+            if chunk.endswith(b"\n"):
+                break
+        return b"".join(chunks)
+
 
 async def stream_process_lines(
     cmd: Sequence[str],
@@ -68,8 +92,13 @@ async def stream_process_lines(
     The final item is always ``("exit", "<returncode>")`` so callers can tell a
     clean finish from an early break. stdout and stderr are interleaved in
     arrival order via a shared queue.
+
+    ``env`` values of ``None`` **delete** that variable from the child instead of
+    setting it — ``{**os.environ, **env}`` can only add or override, never remove,
+    so this is the only way to stop a parent value leaking into the child.
     """
-    full_env = {**os.environ, **(env or {})}
+    merged = {**os.environ, **(env or {})}
+    full_env = {k: v for k, v in merged.items() if v is not None}
     resolved_cmd = resolve_cli_command(cmd, path=full_env.get("PATH"))
     process = await asyncio.create_subprocess_exec(
         *resolved_cmd,
@@ -78,6 +107,7 @@ async def stream_process_lines(
         stdin=asyncio.subprocess.DEVNULL,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        limit=_STREAM_LINE_LIMIT,
     )
 
     queue: asyncio.Queue[ProcessLine | None] = asyncio.Queue()
@@ -88,12 +118,12 @@ async def stream_process_lines(
             return
         try:
             while True:
-                raw = await stream.readline()
+                raw = await _read_line(stream)
                 if not raw:
                     break
                 await queue.put((channel, raw.decode("utf-8", "replace").rstrip("\r\n")))
         except Exception:  # pragma: no cover - defensive: a broken pipe must not hang the queue
-            logger.debug("subagent %s pump failed", channel, exc_info=True)
+            logger.warning("subagent %s pump failed", channel, exc_info=True)
         finally:
             await queue.put(None)  # sentinel: this channel is drained
 
