@@ -34,6 +34,10 @@
 - **分省速查层**：31 省主科教材版本速查，支持搜索与点选（页面明确标注“以学校为准”，非权威对照）；
 - **已核实样例**：山西运城高中 9 科 + 小学主科的完整册次明细（可折叠）。
 
+### 3.5 文档解析新增 anydoc 引擎
+
+集成 [firecrawl/anydoc](https://github.com/firecrawl/anydoc)（v0.2.x，MIT）作为可切换的解析引擎（`parse-anydoc` extra）：纯本地 Rust 转换，Office 全家桶（含老格式 .doc/.ppt/.xls 二进制）、ODF、RTF、EPUB、CSV、文本层 PDF 一站转 Markdown，表格与公式保留，不依赖模型、不联网。扫描版 PDF 本地直接拒绝（无内置 OCR；云端 OCR 默认关闭需显式开启，扫描件请走 MinerU/Docling）。设置 → 知识库 → 文档解析 里选择；PyPI 认准 `firecrawl-anydoc`（裸名 `anydoc` 是无关包）。
+
 ### 4. 语音对话链路（系列补丁）
 
 语音消息端到端修复：空 ASR 不再显示裸标记、横幅一次点击即播、AI 口语稿（transcript）存库并在横幅展示/复制、`tts_speak` 工具强制挂载（防旧前端工具清单漏传）、无真实语音产出时禁止模型嘴硬“语音发你了”、语音附件 mp3 播放副本落盘。
