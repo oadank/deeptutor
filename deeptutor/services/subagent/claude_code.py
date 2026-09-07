@@ -26,7 +26,14 @@ from deeptutor.services.subagent.base import OnEvent, SubagentBackend
 from deeptutor.services.subagent.config import BackendConfig
 # 凭证唯一来源：配置中心 ~/.dsh/.credentials.yaml 的 LITELLM_API_KEY（env 已有则透传）。
 from deeptutor.services.subagent.credentials import litellm_key as _litellm_key
-from deeptutor.services.subagent.process import probe_version, stream_process_lines
+from deeptutor.services.subagent.process import (
+    compact_field as _compact,
+)
+from deeptutor.services.subagent.process import (
+    probe_version,
+    stream_process_lines,
+    truncate_field,
+)
 from deeptutor.services.subagent.types import (
     EVENT_ERROR,
     EVENT_LOG,
@@ -40,8 +47,6 @@ from deeptutor.services.subagent.types import (
 )
 
 logger = logging.getLogger(__name__)
-
-_MAX_FIELD_CHARS = 4000
 
 
 def _ensure_trusted_cwd(cwd: str | None) -> None:
@@ -463,22 +468,7 @@ def _render_tool_result(block: dict[str, Any]) -> str:
         text = "\n".join(p for p in parts if p)
     else:
         text = str(content or "")
-    return _truncate(text) or "(empty result)"
-
-
-def _compact(obj: Any) -> str:
-    try:
-        text = json.dumps(obj, ensure_ascii=False)
-    except (TypeError, ValueError):
-        text = str(obj)
-    return _truncate(text)
-
-
-def _truncate(text: str) -> str:
-    text = text.strip()
-    if len(text) > _MAX_FIELD_CHARS:
-        return text[:_MAX_FIELD_CHARS].rstrip() + " …"
-    return text
+    return truncate_field(text) or "(empty result)"
 
 
 __all__ = ["ClaudeCodeBackend"]
