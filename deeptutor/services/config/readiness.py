@@ -151,6 +151,7 @@ _TOOL_LABELS = {
     "geogebra_analysis": "GeoGebra tool",
     "imagegen": "Image generation tool",
     "videogen": "Video generation tool",
+    "tts_speak": "Voice reply (TTS) tool",
 }
 
 #: Row labels this module writes itself, as opposed to names that come from
@@ -571,7 +572,10 @@ def tool_rows(
             readiness_row(
                 f"tool.{tool_id}",
                 "tools",
-                _TOOL_LABELS[tool_id],
+                # Defensive .get(): a toggleable tool missing from this dict
+                # must degrade to a raw-id row, not 500 the whole readiness
+                # snapshot (tts_speak shipped before its label did).
+                _TOOL_LABELS.get(tool_id, f"{tool_id} tool"),
                 state,
                 detail_code,
                 enabled=enabled,
