@@ -10,6 +10,8 @@ not expose.  The returned id is passed to ``--resume`` on the next consult.
 from __future__ import annotations
 
 import logging
+import os
+from pathlib import Path
 import re
 from typing import Any
 
@@ -39,8 +41,26 @@ class HermesBackend(SubagentBackend):
     display_name = "Hermes Agent"
     cli_command = "hermes"
 
+    def _resolve_cli(self) -> str:
+        """PATH first, then the venv layout under ``HERMES_HOME``.
+
+        The NSSM service PATH predates the hermes venv install, so the bare
+        name resolves for interactive shells but not for the backend — the
+        agent-matrix-documented fallback keeps production working without a
+        service env change.
+        """
+        from shutil import which
+
+        resolved = which(self.cli_command)
+        if resolved:
+            return resolved
+        home = os.environ.get("HERMES_HOME") or str(Path.home() / "AppData" / "Local" / "hermes")
+        exe = "hermes.exe" if os.name == "nt" else "hermes"
+        candidate = Path(home) / "hermes-agent" / "venv" / "Scripts" / exe
+        return str(candidate) if candidate.is_file() else self.cli_command
+
     async def detect(self) -> DetectResult:
-        ok, text = await probe_version([self.cli_command, "--version"])
+        ok, text = await probe_version([self._resolve_cli(), "--version"])
         return DetectResult(
             kind=self.kind,
             display_name=self.display_name,
@@ -61,7 +81,7 @@ class HermesBackend(SubagentBackend):
         if config.system_prompt.strip() and not session_id:
             prompt = f"{config.system_prompt.strip()}\n\n{question}"
 
-        cmd = [self.cli_command, "chat", "--quiet"]
+        cmd = [self._resolve_cli(), "chat", "--quiet"]
         if session_id:
             cmd += ["--resume", session_id]
         if config.model:
