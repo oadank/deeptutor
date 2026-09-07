@@ -41,6 +41,7 @@ ENGINE_PIP_SPECS: dict[str, list[str]] = {
     # ``all`` is upstream's supported way to install every built-in converter
     # dependency (PDF, Office, Outlook, audio, and future additions).
     "markitdown": ["markitdown[all]>=0.1.7"],
+    "anydoc": ["firecrawl-anydoc>=0.2.0"],
     # Keep the base converter and every format-specific dependency aligned
     # with the Docling compatibility floor.  ``format-video`` also brings the
     # ASR dependencies used by audio; legacy Office still needs LibreOffice

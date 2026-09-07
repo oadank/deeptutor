@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from .anydoc.formats import anydoc_supported_formats
 from .docling.formats import docling_supported_formats
 from .liteparse.formats import LITEPARSE_2_14_2_FORMATS
 from .markitdown.formats import markitdown_supported_formats
@@ -17,7 +18,8 @@ def known_parser_formats() -> frozenset[str]:
     final decision inside :class:`ParseService`.
     """
     return frozenset(
-        set(docling_supported_formats())
+        set(anydoc_supported_formats())
+        | set(docling_supported_formats())
         | set(markitdown_supported_formats())
         | set(MINERU_SUPPORTED_FORMATS)
         | set(LITEPARSE_2_14_2_FORMATS)

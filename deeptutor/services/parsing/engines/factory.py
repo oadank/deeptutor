@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import Any, Callable, Dict, List
 
 from deeptutor.services.config.runtime_settings import (
+    DOCUMENT_PARSING_ENGINE_ANYDOC,
     DOCUMENT_PARSING_ENGINE_DOCLING,
     DOCUMENT_PARSING_ENGINE_LITEPARSE,
     DOCUMENT_PARSING_ENGINE_MARKITDOWN,
@@ -48,6 +49,12 @@ def _markitdown_class():
     return MarkItDownParser
 
 
+def _anydoc_class():
+    from .anydoc.engine import AnydocParser
+
+    return AnydocParser
+
+
 def _liteparse_class():
     from .liteparse.engine import LiteParseParser
 
@@ -72,6 +79,7 @@ _ENGINE_LOADERS: Dict[str, Callable[[], Any]] = {
     DOCUMENT_PARSING_ENGINE_MINERU: _mineru_class,
     DOCUMENT_PARSING_ENGINE_DOCLING: _docling_class,
     DOCUMENT_PARSING_ENGINE_MARKITDOWN: _markitdown_class,
+    DOCUMENT_PARSING_ENGINE_ANYDOC: _anydoc_class,
     DOCUMENT_PARSING_ENGINE_PYMUPDF4LLM: _pymupdf4llm_class,
     DOCUMENT_PARSING_ENGINE_LITEPARSE: _liteparse_class,
     DOCUMENT_PARSING_ENGINE_TIKA: _tika_class,
@@ -131,6 +139,16 @@ _ENGINE_META: Dict[str, Dict[str, Any]] = {
             "Fast Rust-backed parser from LlamaIndex for PDF, Office, OpenDocument, "
             "iWork, and images. Markdown output and optional image extraction; "
             "Office-family inputs require LibreOffice."
+        ),
+        "needs_local_models": False,
+    },
+    DOCUMENT_PARSING_ENGINE_ANYDOC: {
+        "name": "anydoc",
+        "description": (
+            "firecrawl/anydoc — pure-Rust converter for Office (including legacy "
+            ".doc/.ppt/.xls), OpenDocument, RTF, EPUB, CSV, and text-layer PDF. "
+            "Tables and formulas preserved; no models, no network, no system "
+            "tools. Scanned PDFs are rejected locally (no built-in OCR)."
         ),
         "needs_local_models": False,
     },

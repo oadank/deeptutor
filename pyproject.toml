@@ -200,6 +200,7 @@ partners = [
 # not a pip dependency. Engines import lazily, so these stay opt-in and an
 # absent engine simply reports unavailable in Settings → Document Parsing.
 parse-markitdown = ["markitdown[all]>=0.1.7"]
+parse-anydoc = ["firecrawl-anydoc>=0.2.0"]
 # Docling's base package intentionally leaves some format backends as extras.
 # Install all input-format dependencies so DeepTutor can honor the complete
 # upstream format list. Legacy Office needs LibreOffice and video needs ffmpeg
@@ -215,6 +216,7 @@ parse-pymupdf4llm = ["pymupdf4llm>=1.28.2"]
 parse-liteparse = ["liteparse>=2.14.2"]
 parse = [
     "deeptutor[parse-markitdown]",
+    "deeptutor[parse-anydoc]",
     "deeptutor[parse-docling]",
     "deeptutor[parse-pymupdf4llm]",
     "deeptutor[parse-liteparse]",
