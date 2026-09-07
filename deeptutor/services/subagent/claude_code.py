@@ -24,6 +24,8 @@ from typing import Any
 
 from deeptutor.services.subagent.base import OnEvent, SubagentBackend
 from deeptutor.services.subagent.config import BackendConfig
+# 凭证唯一来源：配置中心 ~/.dsh/.credentials.yaml 的 LITELLM_API_KEY（env 已有则透传）。
+from deeptutor.services.subagent.credentials import litellm_key as _litellm_key
 from deeptutor.services.subagent.process import probe_version, stream_process_lines
 from deeptutor.services.subagent.types import (
     EVENT_ERROR,
@@ -116,6 +118,50 @@ class ClaudeCodeBackend(SubagentBackend):
     display_name = "Claude Code"
     cli_command = "claude"
 
+    # [2026-09-04] DeepTutor 调 claude 的固定入口脚本：网关 / 模型 / 凭证 / HOME
+    # 全部写死在 deeptutor-claude.mjs 里。
+    # 为什么：consult 走裸 claude 时，凭证靠继承服务进程 env，而 nssm 的
+    # AppEnvironmentExtra 是**启动时刻快照**，凭证不在里面 → claude 报
+    # Not logged in → 退出 1（老大实测确认的现象）。
+    # 走脚本则由脚本注入凭证，与服务 env 解耦。
+    _entry_script = os.environ.get(
+        "DEEPTUTOR_CLAUDE_SCRIPT", r"C:\D\opt\scripts\deeptutor-claude.mjs"
+    )
+
+    def _claude_launcher(self) -> list[str]:
+        """返回启动 claude 的命令前缀。
+
+        优先走入口脚本（自带正确配置）；脚本缺失则退回裸调 claude，
+        由 _child_env() 注入兜底环境，避免"脚本被删 → 整条链路静默死掉"。
+        """
+        if self._entry_script and Path(self._entry_script).exists():
+            return ["node", self._entry_script]
+        logger.warning(
+            "deeptutor-claude 入口脚本缺失（%s），退回裸调 claude", self._entry_script
+        )
+        return [self.cli_command]
+
+    def _child_env(self) -> dict[str, str | None]:
+        """兜底环境：仅在入口脚本缺失、裸调 claude 时使用。
+
+        值为 None 表示从子进程环境删除该变量（见 process.stream_process_lines）。
+        """
+        return {
+            "ANTHROPIC_BASE_URL": os.environ.get(
+                "DEEPTUTOR_CLAUDE_BASE_URL", "http://localhost:4000/"
+            ),
+            "ANTHROPIC_MODEL": os.environ.get(
+                "DEEPTUTOR_CLAUDE_MODEL", "claude-model"
+            ),
+            # LiteLLM 带门禁：不带 key 直接 401（实测）。
+            "ANTHROPIC_AUTH_TOKEN": os.environ.get("DEEPTUTOR_CLAUDE_AUTH_TOKEN")
+            or _litellm_key()
+            or None,
+            "HOME": os.environ.get("HOME") or os.environ.get("USERPROFILE") or "",
+            "CLAUDE_CODE_MAX_CONTEXT_TOKENS": None,
+            "CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT": "1",
+        }
+
     async def detect(self) -> DetectResult:
         ok, text = await probe_version([self.cli_command, "--version"])
         return DetectResult(
@@ -146,7 +192,9 @@ class ClaudeCodeBackend(SubagentBackend):
                 f"them with your Read tool before answering:\n{listing}]"
             )
         cmd = [
-            self.cli_command,
+            # [2026-09-04] 走固定入口脚本：网关/模型/凭证写死在脚本里，
+            # 不再裸调 claude（裸调会继承服务 env，凭证缺失 → Not logged in → 退出 1）。
+            *self._claude_launcher(),
             "-p",
             prompt,
             "--output-format",
@@ -199,8 +247,16 @@ class ClaudeCodeBackend(SubagentBackend):
             result.event_count += 1
             await on_event(SubagentEvent(kind=kind, text=text, raw=raw, meta=meta or {}))
 
+        # 走入口脚本时，凭证/网关/模型由脚本自己设置（写死在里面），这里不掺和；
+        # 只有脚本缺失、退回裸调 claude 时，才注入兜底环境。
+        using_launcher = cmd[0] != self.cli_command
+        child_env = None if using_launcher else self._child_env()
+        logger.info(
+            "claude consult 入口=%s",
+            "deeptutor-claude.mjs 脚本" if using_launcher else "裸调 claude（脚本缺失，兜底）",
+        )
         try:
-            async for channel, line in stream_process_lines(cmd, cwd=cwd):
+            async for channel, line in stream_process_lines(cmd, cwd=cwd, env=child_env):
                 if channel == "exit":
                     if line != "0" and result.success and not result.final_text:
                         result.success = False

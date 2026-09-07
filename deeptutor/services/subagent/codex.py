@@ -22,6 +22,7 @@ from typing import Any
 
 from deeptutor.services.subagent.base import OnEvent, SubagentBackend
 from deeptutor.services.subagent.config import BackendConfig
+from deeptutor.services.subagent.credentials import litellm_key
 from deeptutor.services.subagent.process import probe_version, stream_process_lines
 from deeptutor.services.subagent.types import (
     EVENT_ERROR,
@@ -126,6 +127,9 @@ class CodexBackend(SubagentBackend):
     ) -> ConsultResult:
         config = config or BackendConfig()
         cmd = self._build_command(question, session_id=session_id, config=config, images=images)
+        # codex 的 ~/.codex 配置把网关凭证挂在 LITELLM_API_KEY 上；服务 env 里通常没有，
+        # 从配置中心补（见 credentials.litellm_key：env 已有则原样透传）。
+        env = {"LITELLM_API_KEY": litellm_key()} if litellm_key() else None
         result = ConsultResult(session_id=session_id)
 
         async def emit(
@@ -135,7 +139,7 @@ class CodexBackend(SubagentBackend):
             await on_event(SubagentEvent(kind=kind, text=text, raw=raw, meta=meta or {}))
 
         try:
-            async for channel, line in stream_process_lines(cmd, cwd=cwd):
+            async for channel, line in stream_process_lines(cmd, cwd=cwd, env=env):
                 if channel == "exit":
                     if line != "0" and result.success and not result.final_text:
                         result.success = False
