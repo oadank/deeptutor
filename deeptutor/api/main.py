@@ -509,6 +509,7 @@ from deeptutor.api.routers import (
     space_mcp,
     subagents,
     system,
+    textbook_manifest,
     unified_ws,
     video_learning,
     visualizers,
@@ -654,6 +655,9 @@ app.include_router(
 app.include_router(skills.router, prefix="/api/skills", tags=["skills"], dependencies=_auth)
 app.include_router(
     subagents.router, prefix="/api/subagents", tags=["subagents"], dependencies=_auth
+)
+app.include_router(
+    textbook_manifest.router, prefix="/api", tags=["textbook-manifest"], dependencies=_auth
 )
 app.include_router(personas.router, prefix="/api", tags=["personas"], dependencies=_auth)
 app.include_router(tools_router.router, prefix="/api/tools", tags=["tools"], dependencies=_auth)

@@ -6,6 +6,7 @@ import { useTranslation } from "react-i18next";
 import { useCapabilityFilter } from "@/features/capabilities/useCapabilityCatalog";
 import {
   ArrowUpRight,
+  BookDown,
   ClipboardList,
   Ear,
   Github,
@@ -40,6 +41,7 @@ type DashKey =
   | "chat_history"
   | "notebooks"
   | "question_bank"
+  | "textbook_downloads"
   | "personas"
   | "skills"
   | "mcp"
@@ -123,6 +125,17 @@ const GROUPS: DashboardGroup[] = [
         unit: { zh: "道题", en: "questions" },
         tile: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
         load: async () => (await listNotebookEntries({ limit: 1 })).total,
+      },
+      {
+        key: "textbook_downloads",
+        href: "/space/textbook-downloads",
+        icon: BookDown,
+        title: { zh: "教材下载", en: "Textbook Downloads" },
+        blurb: {
+          zh: "全国下载渠道 + 分省教材版本速查，先选省份再下载。",
+          en: "Nationwide channels + per-province edition quick-check.",
+        },
+        tile: "bg-teal-500/10 text-teal-600 dark:text-teal-400",
       },
     ],
   },
