@@ -6,6 +6,7 @@ import {
   Check,
   CircleAlert,
   Download,
+  GitFork,
   Github,
   RefreshCw,
   RotateCw,
@@ -264,6 +265,46 @@ export default function AboutSettingsPage() {
             )}
           </div>
         </div>
+      </section>
+
+      {/* [local patch 2026-09-06] 本 fork 的定制说明：本部署叠加了上游没有的
+          修复与功能，升级前先看这里（详见仓库 README）。 */}
+      <section className="mb-10 rounded-2xl border border-teal-500/30 bg-teal-500/5 px-5 py-4">
+        <h2 className="flex items-center gap-2 font-serif text-[15px] font-semibold text-[var(--foreground)]">
+          <GitFork className="h-4 w-4 text-teal-600 dark:text-teal-400" />
+          本机定制版（oadank fork · 基于 v1.6.5）
+        </h2>
+        <ul className="mt-2.5 space-y-1.5 text-[13px] leading-relaxed text-[var(--foreground)]">
+          <li>
+            · <b>子代理管线</b>：consult stdout 行上限 8MB（上游只截断渲染层，泵层 64KB
+            问题未修）；OpenClaw / DeepSeek Harness 走 ACP；共享凭证注入；hermes
+            路径兜底；claude 信任预注册 —— 6/6 智能体实测可用。
+          </li>
+          <li>
+            · <b>沙箱白名单</b>：exec 环境补 USERPROFILE / APPDATA / ANTHROPIC_*（服务账号下
+            claude 必需）。
+          </li>
+          <li>
+            · <b>学习空间</b>：新增「教材下载」页（全国指南 + 31 省版本速查 + 运城已核实明细）。
+          </li>
+          <li>
+            · <b>语音链路 / 会话稳定性</b>：语音横幅、tts_speak 强制挂载、孤儿 turn
+            清扫、流式看门狗、中断式注入等系列补丁。
+          </li>
+        </ul>
+        <p className="mt-2.5 text-[12px] text-[var(--muted-foreground)]">
+          ⚠️ 本部署不做自动升级——上游新版本需手工合并并保留以上补丁（同步方法见仓库
+          README）。当前所有定制内容详见
+          <a
+            href="https://github.com/oadank/deeptutor#readme"
+            target="_blank"
+            rel="noreferrer noopener"
+            className="mx-1 underline decoration-dotted underline-offset-2"
+          >
+            仓库 README
+          </a>
+          。
+        </p>
       </section>
 
       {error && (
