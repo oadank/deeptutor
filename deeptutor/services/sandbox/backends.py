@@ -256,7 +256,24 @@ class RestrictedSubprocessBackend(SandboxBackend):
 
     level = IsolationLevel.APPLICATION
 
-    _SAFE_ENV_KEYS = ("PATH", "PATHEXT", "HOME", "LANG", "LC_ALL", "TMPDIR", "SYSTEMROOT")
+    _SAFE_ENV_KEYS = (
+        "PATH",
+        "PATHEXT",
+        "HOME",
+        "LANG",
+        "LC_ALL",
+        "TMPDIR",
+        "SYSTEMROOT",
+        # Windows user-context keys — required for CLIs that locate their
+        # config under %USERPROFILE% (e.g. Claude Code's .claude dir).
+        "USERPROFILE",
+        "APPDATA",
+        # LiteLLM gateway credentials for model CLIs launched inside the
+        # sandbox (claude -p reads ANTHROPIC_AUTH_TOKEN / _BASE_URL / _MODEL).
+        "ANTHROPIC_AUTH_TOKEN",
+        "ANTHROPIC_BASE_URL",
+        "ANTHROPIC_MODEL",
+    )
 
     def __init__(
         self,
