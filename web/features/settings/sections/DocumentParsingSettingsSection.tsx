@@ -63,6 +63,8 @@ const ENGINE_DESCRIPTION_KEYS: Record<string, string> = {
     "Lightweight, no model downloads or CUDA — runs on low-end / GPU-less machines. PDF/e-book → Markdown and can extract images. PDF and e-book formats only.",
   liteparse:
     "Fast, lightweight PDF parser with spatial text extraction. Markdown output, optional image extraction. No model downloads. Developed by LlamaIndex.",
+  anydoc:
+    "firecrawl/anydoc — fully local pure-Rust converter for Office (including legacy .doc/.ppt/.xls), OpenDocument, RTF, EPUB, CSV, and text-layer PDF. Tables and formulas preserved; no models, no network. Scanned PDFs are rejected locally — no built-in OCR, and cloud OCR is off by default.",
   tika: "Remote Apache Tika server. Broad format support, no local install or model downloads. Point at an existing tika-server container.",
 };
 

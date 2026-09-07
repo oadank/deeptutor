@@ -5067,5 +5067,6 @@
   "readiness.detail.redis_unreachable": "Redis is unreachable",
   "readiness.detail.redis_not_configured": "not configured",
   "readiness.detail.multiple_workers_require_redis": "more than one backend worker needs Redis coordination",
-  "readiness.detail.redis_available_but_memory_selected": "Redis is reachable — coordination could be switched to it"
+  "readiness.detail.redis_available_but_memory_selected": "Redis is reachable — coordination could be switched to it",
+  "firecrawl/anydoc — fully local pure-Rust converter for Office (including legacy .doc/.ppt/.xls), OpenDocument, RTF, EPUB, CSV, and text-layer PDF. Tables and formulas preserved; no models, no network. Scanned PDFs are rejected locally — no built-in OCR, and cloud OCR is off by default.": "firecrawl/anydoc — fully local pure-Rust converter for Office (including legacy .doc/.ppt/.xls), OpenDocument, RTF, EPUB, CSV, and text-layer PDF. Tables and formulas preserved; no models, no network. Scanned PDFs are rejected locally — no built-in OCR, and cloud OCR is off by default."
 }

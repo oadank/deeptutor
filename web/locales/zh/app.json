@@ -5067,5 +5067,6 @@
   "readiness.detail.redis_unreachable": "Redis 连不上",
   "readiness.detail.redis_not_configured": "未配置",
   "readiness.detail.multiple_workers_require_redis": "多进程后端必须用 Redis 协调",
-  "readiness.detail.redis_available_but_memory_selected": "Redis 可用，可以把轮次协调切到它"
+  "readiness.detail.redis_available_but_memory_selected": "Redis 可用，可以把轮次协调切到它",
+  "firecrawl/anydoc — fully local pure-Rust converter for Office (including legacy .doc/.ppt/.xls), OpenDocument, RTF, EPUB, CSV, and text-layer PDF. Tables and formulas preserved; no models, no network. Scanned PDFs are rejected locally — no built-in OCR, and cloud OCR is off by default.": "firecrawl/anydoc —— 纯本地转换引擎：Office 全家桶（含老格式 .doc/.ppt/.xls）、OpenDocument、RTF、EPUB、CSV、文本层 PDF 一站转 Markdown，表格与公式保留。纯 Rust 实现，不依赖模型、不联网。扫描版 PDF 本地直接拒绝（无内置 OCR；云端 OCR 默认关闭，需显式开启，否则请改用 MinerU/Docling 引擎）。"
 }
