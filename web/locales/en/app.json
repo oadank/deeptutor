@@ -5068,5 +5068,16 @@
   "readiness.detail.redis_not_configured": "not configured",
   "readiness.detail.multiple_workers_require_redis": "more than one backend worker needs Redis coordination",
   "readiness.detail.redis_available_but_memory_selected": "Redis is reachable — coordination could be switched to it",
-  "firecrawl/anydoc — fully local pure-Rust converter for Office (including legacy .doc/.ppt/.xls), OpenDocument, RTF, EPUB, CSV, and text-layer PDF. Tables and formulas preserved; no models, no network. Scanned PDFs are rejected locally — no built-in OCR, and cloud OCR is off by default.": "firecrawl/anydoc — fully local pure-Rust converter for Office (including legacy .doc/.ppt/.xls), OpenDocument, RTF, EPUB, CSV, and text-layer PDF. Tables and formulas preserved; no models, no network. Scanned PDFs are rejected locally — no built-in OCR, and cloud OCR is off by default."
+  "firecrawl/anydoc — fully local pure-Rust converter for Office (including legacy .doc/.ppt/.xls), OpenDocument, RTF, EPUB, CSV, and text-layer PDF. Tables and formulas preserved; no models, no network. Scanned PDFs are rejected locally — no built-in OCR, and cloud OCR is off by default.": "firecrawl/anydoc — fully local pure-Rust converter for Office (including legacy .doc/.ppt/.xls), OpenDocument, RTF, EPUB, CSV, and text-layer PDF. Tables and formulas preserved; no models, no network. Scanned PDFs are rejected locally — no built-in OCR, and cloud OCR is off by default.",
+  "codex.oauth.callbackRecoveryTitle": "Finish sign-in from the callback address",
+  "codex.oauth.callbackRecoveryHint": "If your browser lands on a page that cannot load — the usual case in Docker, where the callback port is not published — copy that page's whole address and paste it here.",
+  "codex.oauth.callbackUrlLabel": "Callback address",
+  "codex.oauth.completeSignIn": "Finish sign-in",
+  "codex.oauth.callbackUrlInvalid": "That address is not the callback this sign-in is waiting for.",
+  "Courses could not load": "Courses could not load",
+  "Could not copy": "Could not copy",
+  "The clipboard is not available in this browser.": "The clipboard is not available in this browser.",
+  "That question is no longer waiting for an answer, so this was sent as a new message.": "That question is no longer waiting for an answer, so this was sent as a new message.",
+  "A knowledge base name cannot contain {{chars}} — these separate paths and URLs.": "A knowledge base name cannot contain {{chars}} — these separate paths and URLs.",
+  "Select text in the document first.": "Select text in the document first."
 }

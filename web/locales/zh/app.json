@@ -4832,7 +4832,7 @@
   "Web Sources": "网页源",
   "You ask": "你问",
   "Your account doesn't have {{model}} assigned yet. Please contact your administrator to get access.": "你的账号还没有分配 {{model}}，请联系管理员开通。",
-  "attachments": "个附件",
+  "attachments": "附件",
   "contextBudget.note.deferredTools": "上下文预算提示：延迟加载的工具",
   "e.g. docs/ — leave empty for root": "例如 docs/——留空表示根目录",
   "https://docs.deeptutor.info/": "https://docs.deeptutor.info/",
@@ -5068,5 +5068,16 @@
   "readiness.detail.redis_not_configured": "未配置",
   "readiness.detail.multiple_workers_require_redis": "多进程后端必须用 Redis 协调",
   "readiness.detail.redis_available_but_memory_selected": "Redis 可用，可以把轮次协调切到它",
-  "firecrawl/anydoc — fully local pure-Rust converter for Office (including legacy .doc/.ppt/.xls), OpenDocument, RTF, EPUB, CSV, and text-layer PDF. Tables and formulas preserved; no models, no network. Scanned PDFs are rejected locally — no built-in OCR, and cloud OCR is off by default.": "firecrawl/anydoc —— 纯本地转换引擎：Office 全家桶（含老格式 .doc/.ppt/.xls）、OpenDocument、RTF、EPUB、CSV、文本层 PDF 一站转 Markdown，表格与公式保留。纯 Rust 实现，不依赖模型、不联网。扫描版 PDF 本地直接拒绝（无内置 OCR；云端 OCR 默认关闭，需显式开启，否则请改用 MinerU/Docling 引擎）。"
+  "firecrawl/anydoc — fully local pure-Rust converter for Office (including legacy .doc/.ppt/.xls), OpenDocument, RTF, EPUB, CSV, and text-layer PDF. Tables and formulas preserved; no models, no network. Scanned PDFs are rejected locally — no built-in OCR, and cloud OCR is off by default.": "firecrawl/anydoc —— 纯本地转换引擎：Office 全家桶（含老格式 .doc/.ppt/.xls）、OpenDocument、RTF、EPUB、CSV、文本层 PDF 一站转 Markdown，表格与公式保留。纯 Rust 实现，不依赖模型、不联网。扫描版 PDF 本地直接拒绝（无内置 OCR；云端 OCR 默认关闭，需显式开启，否则请改用 MinerU/Docling 引擎）。",
+  "codex.oauth.callbackRecoveryTitle": "用回调地址完成登录",
+  "codex.oauth.callbackRecoveryHint": "如果浏览器停在一个打不开的页面上——Docker 部署没有发布回调端口时通常如此——把那个页面的完整地址复制过来粘贴到这里。",
+  "codex.oauth.callbackUrlLabel": "回调地址",
+  "codex.oauth.completeSignIn": "完成登录",
+  "codex.oauth.callbackUrlInvalid": "这个地址不是本次登录在等待的回调。",
+  "Courses could not load": "课程加载失败",
+  "Could not copy": "复制失败",
+  "The clipboard is not available in this browser.": "当前浏览器环境无法使用剪贴板。",
+  "That question is no longer waiting for an answer, so this was sent as a new message.": "这道题已经不再等待作答，所以这条内容作为新消息发送了。",
+  "A knowledge base name cannot contain {{chars}} — these separate paths and URLs.": "知识库名称不能包含 {{chars}} —— 这些字符会切断路径和 URL。",
+  "Select text in the document first.": "请先在文档中选中文字。"
 }

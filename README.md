@@ -2,7 +2,7 @@
 
 # DeepTutor · 本机定制版（oadank fork）
 
-**上游**：[HKUDS/DeepTutor](https://github.com/HKUDS/DeepTutor)（v1.6.5 已合入）· 本 fork 在其之上持续叠加本地定制补丁
+**上游**：[HKUDS/DeepTutor](https://github.com/HKUDS/DeepTutor)（v1.6.6 已合入）· 本 fork 在其之上持续叠加本地定制补丁
 
 </div>
 
@@ -48,14 +48,10 @@
 - 前端流式看门狗：对照后端 active-turn 真实状态收敛僵死的“正在输入”UI（配套 `/active-turn` 看门狗端点）；
 - 中断式注入：turn 运行中再发消息注入当前回合而非拒绝。
 
-### 6. v1.6.5 合并说明
+### 6. 上游合并说明
 
-上游 v1.6.5 把 chat 管线重构成薄壳（逻辑上移 `agents/loop/`）。本 fork 的迁移：
-
-- `_drain_user_injections`（注入式中断）挂回 `AgenticChatPipeline`；
-- `tts_speak` 强制挂载迁入新共享模块 `_shared/tool_runtime.py`；
-- `voice_policy` 提示块追加到上游 `foundation_blocks()` 之后；
-- locale 文件语义化合并（本地 keys ∪ 上游 keys）。
+- **v1.6.5**：上游把 chat 管线重构成薄壳（逻辑上移 `agents/loop/`）。本 fork 的迁移：`_drain_user_injections`（注入式中断）挂回 `AgenticChatPipeline`；`tts_speak` 强制挂载迁入新共享模块 `_shared/tool_runtime.py`；`voice_policy` 提示块追加到上游 `foundation_blocks()` 之后；locale 文件语义化合并（本地 keys ∪ 上游 keys）。
+- **v1.6.6**：已合入。冲突主要在 README / locale JSON；chat 管线与 llm 层自动合并后逐项核对保活补丁。
 
 ## 部署形态（本机）
 
@@ -73,20 +69,5 @@ git merge v1.6.6   # 下一个版本
 
 ---
 
-以下为上游项目信息。项目本身（agent-native 架构、能力系统、多入口）详见 [HKUDS/DeepTutor](https://github.com/HKUDS/DeepTutor) 与 [deeptutor.info](https://deeptutor.info)。
-
-<div align="center">
-
-<p><img src="assets/figs/logo/logo.png" alt="DeepTutor logo" height="56" style="vertical-align: middle;">&nbsp;<img src="assets/figs/logo/banner.png" alt="DeepTutor" height="48" style="vertical-align: middle;"></p>
-
-# DeepTutor: Lifelong Personalized Tutoring
-
-[![Python 3.11+](https://img.shields.io/badge/Python-3.11%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/downloads/)
-[![Next.js 16](https://img.shields.io/badge/Next.js-16-000000?style=flat-square&logo=next.js&logoColor=white)](https://nextjs.org/)
-[![License](https://img.shields.io/badge/License-Apache_2.0-blue?style=flat-square)](LICENSE)
-[![GitHub release](https://img.shields.io/github/v/release/HKUDS/DeepTutor?style=flat-square&color=brightgreen)](https://github.com/HKUDS/DeepTutor/releases)
-[![Docs](https://img.shields.io/badge/Docs-deeptutor.info-0A0A0A?style=flat-square)](https://deeptutor.info)
-
-</div>
-
 > 完整英文原版 README 见 [HKUDS/DeepTutor](https://github.com/HKUDS/DeepTutor#readme)。本 fork 不维护多语言版与上游徽章。Licensed under the [Apache License 2.0](LICENSE).
+
