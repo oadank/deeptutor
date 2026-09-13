@@ -5080,5 +5080,13 @@
   "The clipboard is not available in this browser.": "当前浏览器环境无法使用剪贴板。",
   "That question is no longer waiting for an answer, so this was sent as a new message.": "这道题已经不再等待作答，所以这条内容作为新消息发送了。",
   "A knowledge base name cannot contain {{chars}} — these separate paths and URLs.": "知识库名称不能包含 {{chars}} —— 这些字符会切断路径和 URL。",
-  "Select text in the document first.": "请先在文档中选中文字。"
+  "Select text in the document first.": "请先在文档中选中文字。",
+  "Local vector retrieval with hybrid BM25/vector fusion. Works out of the box.": "本地向量检索，混合 BM25/向量融合。开箱即用。",
+  "Hosted, vectorless engine: the chat agent reads documents through PageIndex SDK tools. Requires an API key; PDF, Office, text and Markdown formats.": "云端无向量引擎：对话智能体通过 PageIndex SDK 工具读取文档。需要 API Key；支持 PDF、Office、纯文本和 Markdown。",
+  "Local, chunkless and vectorless document indexing. Uses the active LLM and accepts PDF files.": "本地无分块、无向量文档索引。使用当前启用的对话模型，支持 PDF。",
+  "Local knowledge-graph retrieval (global/local/drift/basic). Needs `pip install 'deeptutor[graphrag]'`; indexing is LLM-heavy.": "本地知识图谱检索（global/local/drift/basic）。需安装 `pip install 'deeptutor[graphrag]'`；建索引非常消耗 LLM。",
+  "Graph + vector retrieval with multimodal parsing (naive/local/global/hybrid/mix). Needs `pip install 'deeptutor[rag-lightrag]'`; indexing is LLM-heavy.": "图 + 向量检索，支持多模态解析（naive/local/global/hybrid/mix）。需安装 `pip install 'deeptutor[rag-lightrag]'`；建索引非常消耗 LLM。",
+  "Retrieval offloaded to an external, standalone LightRAG server you run. No local index — connect a KB to its URL and query it over HTTP (naive/local/global/hybrid/mix).": "检索交给自建的独立 LightRAG 服务器。本地不建索引——把知识库连到其 URL，经 HTTP 查询（naive/local/global/hybrid/mix）。",
+  "Retrieval offloaded to a knowledge base you keep in Tencent IMA. No local index and no copy — connect a KB to its IMA library and query it over IMA's OpenAPI. Chat can also browse the library's documents, read a full source, search your IMA notes, and (when you ask) collect a web page or save a note. Uploading files still happens in IMA itself. Requires an IMA Client ID and API key.": "检索交给腾讯云智服 IMA 中的知识库。本地不建索引、不留副本——把知识库连到 IMA 文库，经 IMA OpenAPI 查询。对话中还可浏览文库文档、读取完整来源、搜索 IMA 笔记，并在你要求时收藏网页或保存笔记。上传文件仍在 IMA 侧完成。需要 IMA Client ID 与 API Key。",
+  "Retrieval offloaded to a knowledge base in your self-hosted WeKnora deployment. No local index or document copy; connect to its API URL, API key, and knowledge-base ID.": "检索交给自托管 WeKnora 中的知识库。本地不建索引、不留文档副本；需配置其 API URL、API Key 与知识库 ID。"
 }

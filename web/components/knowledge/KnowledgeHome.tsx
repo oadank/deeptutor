@@ -179,7 +179,7 @@ export default function KnowledgeHome({
           <EngineStatusBadge status={status} />
         </div>
         <p className="line-clamp-2 text-[11.5px] leading-snug text-[var(--muted-foreground)]">
-          {provider.description}
+          {t(provider.description)}
         </p>
         <div className="mt-auto flex items-center gap-2 pt-1 text-[11px] text-[var(--muted-foreground)]">
           {provider.modes &&

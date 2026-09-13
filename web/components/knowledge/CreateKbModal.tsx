@@ -886,7 +886,7 @@ function NewModeFields({
                     ) : null}
                   </div>
                   <span className="text-[11.5px] leading-snug text-[var(--muted-foreground)]">
-                    {p.description}
+                    {t(p.description)}
                   </span>
                 </button>
                 {p.id === "pageindex" && (
@@ -1416,7 +1416,7 @@ function LinkModeFields({
                   ) : null}
                 </div>
                 <span className="text-[11.5px] leading-snug text-[var(--muted-foreground)]">
-                  {p.description}
+                  {t(p.description)}
                 </span>
               </button>
             );
