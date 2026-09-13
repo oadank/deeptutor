@@ -54,9 +54,17 @@ export function ReadingExtensionBar({
   const [busy, setBusy] = useState("");
   const [result, setResult] = useState<ReadingExtensionResult | null>(null);
   const [speaking, setSpeaking] = useState(false);
+  const audioRef = useMemo(() => {
+    if (typeof Audio === "undefined") return null;
+    return new Audio();
+  }, []);
 
   function stopSpeaking() {
     window.speechSynthesis?.cancel();
+    if (audioRef) {
+      audioRef.pause();
+      audioRef.removeAttribute("src");
+    }
     setSpeaking(false);
   }
 
@@ -88,9 +96,13 @@ export function ReadingExtensionBar({
   useEffect(() => {
     return () => {
       window.speechSynthesis?.cancel();
+      if (audioRef) {
+        audioRef.pause();
+        audioRef.removeAttribute("src");
+      }
       setSpeaking(false);
     };
-  }, [locator, materialId]);
+  }, [locator, materialId, audioRef]);
 
   const actions = useMemo(
     () =>
@@ -120,6 +132,34 @@ export function ReadingExtensionBar({
       setResult(next);
       if (next.type === "browser_speech") {
         const text = String(next.payload.text || "");
+        const audioUrl = String(next.payload.audio_url || "");
+        // Prefer the server TTS gateway (configured voice) when the extension
+        // produced one; speechSynthesis is the mechanical fallback.
+        if (audioUrl && audioRef) {
+          window.speechSynthesis?.cancel();
+          audioRef.pause();
+          audioRef.src = audioUrl;
+          audioRef.onended = () => setSpeaking(false);
+          audioRef.onerror = () => {
+            setSpeaking(false);
+            // Fall through to browser speech if the file 404s mid-play.
+            if (text && "speechSynthesis" in window) {
+              const utterance = new SpeechSynthesisUtterance(text);
+              utterance.lang = String(next.payload.locale || i18n.language);
+              utterance.onend = () => setSpeaking(false);
+              utterance.onerror = () => setSpeaking(false);
+              window.speechSynthesis.speak(utterance);
+              setSpeaking(true);
+            }
+          };
+          try {
+            await audioRef.play();
+            setSpeaking(true);
+            return;
+          } catch {
+            // Autoplay blocked or network error — fall through to browser voice.
+          }
+        }
         if (!("speechSynthesis" in window) || !text) {
           onError(t("No speech voice is available in this browser."));
           return;

@@ -12,6 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 import json
 import logging
 import threading
+import time
 from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, Field, model_validator
@@ -119,7 +120,10 @@ class ReadingExtensionRegistry:
         self._execution_lock = threading.Lock()
         self._executors: dict[str, ThreadPoolExecutor] = {}
         self._active: set[str] = set()
-        self._timed_out: set[str] = set()
+        # extension_id → monotonic time when the circuit may close again.
+        # Permanent open (old behaviour) left one slow LLM call bricking the
+        # button until the process restarted.
+        self._timed_out_until: dict[str, float] = {}
 
     def all(self) -> list[ReadingExtension]:
         return sorted(self._extensions.values(), key=lambda row: row.manifest.id)
@@ -130,7 +134,12 @@ class ReadingExtensionRegistry:
     def begin_action(self, extension_id: str) -> bool:
         """Reserve one extension worker unless it is busy or circuit-broken."""
         with self._execution_lock:
-            if extension_id in self._active or extension_id in self._timed_out:
+            until = self._timed_out_until.get(extension_id)
+            if until is not None:
+                if time.monotonic() < until:
+                    return False
+                self._timed_out_until.pop(extension_id, None)
+            if extension_id in self._active:
                 return False
             self._active.add(extension_id)
             return True
@@ -139,10 +148,10 @@ class ReadingExtensionRegistry:
         with self._execution_lock:
             self._active.discard(extension_id)
 
-    def mark_timed_out(self, extension_id: str) -> None:
-        """Open the circuit: Python cannot safely kill a stuck sync handler."""
+    def mark_timed_out(self, extension_id: str, *, cooldown_s: float = 90.0) -> None:
+        """Open the circuit briefly: Python cannot safely kill a stuck sync handler."""
         with self._execution_lock:
-            self._timed_out.add(extension_id)
+            self._timed_out_until[extension_id] = time.monotonic() + max(1.0, cooldown_s)
 
     def executor_for(self, extension_id: str) -> ThreadPoolExecutor:
         """Return the extension's private single worker, never the global pool."""

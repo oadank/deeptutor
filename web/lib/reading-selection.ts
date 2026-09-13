@@ -120,7 +120,12 @@ export function unionRect(rects: NormalisedRect[]): NormalisedRect | null {
  * `reader_goto` depends on it.
  */
 export function cleanQuote(raw: string, limit = 2000): string {
-  const flat = (raw || "").replace(/\s+/g, " ").trim();
+  const flat = (raw || "")
+    // Soft hyphen / ZWSP–ZWJ / BOM: invisible to the reader, but they make
+    // the server's unit-text check reject an otherwise valid selection.
+    .replace(/[­​-‍﻿]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
   return flat.length <= limit ? flat : flat.slice(0, limit);
 }
 

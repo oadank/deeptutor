@@ -1006,12 +1006,13 @@ class TurnExecutor:
                         voice_text
                     )
                     ext = "mp3" if "mpeg" in (audio_content_type or "") else "wav"
-                    run_dir = _run_dir(None, "tts")
+                    run_dir, workspace_id = _run_dir(None, "tts")
                     artifacts = _write_media(
                         run_dir,
                         [(audio_bytes, audio_content_type)],
                         stem="voice-reply",
                         default_ext=ext,
+                        workspace_id=workspace_id,
                     )
                     voice_reply_attachments = [
                         {
