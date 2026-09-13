@@ -2486,6 +2486,7 @@
   "Delete this turn?": "Delete this turn?",
   "Skills Auto": "Skills Auto",
   "Failed to load GeoGebra": "Failed to load GeoGebra",
+  "GeoGebra rejected {{count}} command(s)": "GeoGebra rejected {{count}} command(s)",
   "Loading GeoGebra...": "Loading GeoGebra...",
   "HTML visualization": "HTML visualization",
   "SVG visualization": "SVG visualization",

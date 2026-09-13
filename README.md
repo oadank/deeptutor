@@ -63,7 +63,7 @@
 
 ```bash
 git fetch origin --tags
-git merge v1.6.6   # 下一个版本
+git merge v1.6.7   # 下一个版本
 # 冲突原则：process.py 的 8MB 上限、trust 预注册、credentials 注入必须保留
 ```
 
