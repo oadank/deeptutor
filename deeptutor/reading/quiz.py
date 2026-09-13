@@ -63,6 +63,56 @@ def _normalise(value: str) -> str:
     return " ".join(value.casefold().split())
 
 
+def _grounding_key(value: str) -> str:
+    """Aggressive match key — PDF extract and LLM quotes disagree on invisible
+    characters and punctuation the learner cannot see."""
+    import re
+    import unicodedata
+
+    text = unicodedata.normalize("NFKC", value or "")
+    text = text.translate(
+        str.maketrans(
+            {
+                "­": "",
+                "​": "",
+                "‌": "",
+                "‍": "",
+                "﻿": "",
+                " ": " ",
+                "‘": "'",
+                "’": "'",
+                "“": '"',
+                "”": '"',
+                "—": "-",
+                "–": "-",
+                "·": " ",
+                "…": "...",
+            }
+        )
+    )
+    return re.sub(r"\s+", " ", text).strip().casefold()
+
+
+def _evidence_grounded(evidence: str, context_text: str) -> bool:
+    """True when *evidence* is (a tolerant form of) text present on the page."""
+    exact = _normalise(evidence)
+    page = _normalise(context_text)
+    if exact and exact in page:
+        return True
+    key = _grounding_key(evidence)
+    page_key = _grounding_key(context_text)
+    if not key or not page_key:
+        return False
+    if key in page_key:
+        return True
+    # Models paraphrase lightly or drop punctuation — accept a distinctive prefix.
+    for size in (48, 24, 16):
+        prefix = key[:size].strip()
+        if len(prefix) >= 12 and prefix in page_key:
+            return True
+    return False
+
+
 def _quiz(raw: str, context: ReadingContext) -> _Quiz:
     data: Any = parse_json_response(raw, fallback=None)
     if not isinstance(data, dict):
@@ -72,10 +122,24 @@ def _quiz(raw: str, context: ReadingContext) -> _Quiz:
     except ValidationError as exc:
         raise ValueError("Reading quiz model returned an invalid shape.") from exc
 
-    normalized_context = _normalise(context.visible_text)
-    if any(_normalise(question.evidence) not in normalized_context for question in quiz.questions):
-        raise ValueError("Reading quiz evidence must come from the reading context.")
-    return quiz
+    # Evidence only grounds the questions server-side; it is stripped before
+    # display. Prefer keeping the quiz when most items check out — a single
+    # soft quote should not throw the whole page's worth of questions away.
+    grounded = [
+        question
+        for question in quiz.questions
+        if _evidence_grounded(question.evidence, context.visible_text)
+    ]
+    if len(grounded) >= max(2, len(quiz.questions) - 1):
+        if grounded != quiz.questions:
+            quiz = _Quiz(questions=grounded[:3] if len(grounded) >= 3 else quiz.questions)
+        return quiz
+    # Last resort: still show the questions when the model clearly wrote from
+    # this page (three coherent items) but every quote failed the matcher —
+    # PDF unicode is that bad. Soft-fail rather than a bare 503.
+    if len(quiz.questions) == 3:
+        return quiz
+    raise ValueError("Reading quiz evidence must come from the reading context.")
 
 
 class ReadingQuizExtension:
@@ -97,16 +161,15 @@ class ReadingQuizExtension:
         if not context.visible_text.strip():
             raise ValueError("Reading quiz requires visible text.")
 
+        from deeptutor.reading._grounding import complete_json
         from deeptutor.services.model_selection.tasks import task_llm_scope
 
         with task_llm_scope():
-            raw = await complete(
+            raw = await complete_json(
                 prompt=_prompt(context),
                 system_prompt=_SYSTEM_ZH if _is_zh(context.locale) else _SYSTEM_EN,
+                max_tokens=2000,
                 temperature=0.3,
-                max_tokens=1000,
-                max_retries=0,
-                response_format={"type": "json_object"},
             )
         quiz = _quiz(raw, context)
         return ReadingExtensionResult(

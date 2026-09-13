@@ -3,12 +3,54 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING
+import logging
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from deeptutor.reading.extensions import ReadingContext
 
+logger = logging.getLogger(__name__)
 MAX_GROUNDING_CONTEXT_CHARS = 6_000
+
+
+async def complete_json(
+    *,
+    prompt: str,
+    system_prompt: str,
+    max_tokens: int,
+    temperature: float = 0.2,
+) -> str:
+    """LLM JSON call that survives reasoning models returning empty content.
+
+    Thinking models routinely spend the whole budget on hidden reasoning and
+    leave nothing for the answer — which used to surface as "invalid JSON"
+    and a 503. Retry once at low reasoning effort with a higher ceiling, same
+    pattern as the book pipeline in v1.6.7.
+    """
+    from deeptutor.services.llm import complete
+
+    raw = await complete(
+        prompt=prompt,
+        system_prompt=system_prompt,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        max_retries=0,
+        response_format={"type": "json_object"},
+    )
+    if raw and raw.strip():
+        return raw
+    logger.warning(
+        "Reading extension LLM returned empty content — retrying at low reasoning effort"
+    )
+    return await complete(
+        prompt=prompt,
+        system_prompt=system_prompt,
+        temperature=temperature,
+        max_tokens=max(max_tokens, 2000),
+        max_retries=0,
+        reasoning_effort="low",
+        response_format={"type": "json_object"},
+    )
 
 
 def normalized_with_map(value: str) -> tuple[str, list[int]]:

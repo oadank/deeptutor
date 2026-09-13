@@ -190,6 +190,24 @@ async def run_extension_action(
                 "recoverable": True,
             },
         ) from exc
+    except ValueError as exc:
+        # Model-shape / grounding failures are user-actionable — do not dress
+        # them as a temporary outage.
+        logger.warning(
+            "Reading extension %s action %s rejected: %s",
+            extension_id,
+            action,
+            exc,
+            exc_info=True,
+        )
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "message": str(exc)
+                or "The model returned an unusable result for this passage. Try selecting different text or scrolling to another page.",
+                "recoverable": True,
+            },
+        ) from exc
     except Exception as exc:
         # Previously every failure (LLM JSON shape, missing key, provider
         # error) was swallowed into the same 503 with no log line — undiagnosable.

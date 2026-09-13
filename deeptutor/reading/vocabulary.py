@@ -64,10 +64,24 @@ def _normalise(value: str) -> str:
 def _term_comes_from_selection(term: str, selection: str) -> bool:
     normalized_term = _normalise(term)
     normalized_selection = _normalise(selection)
+    if not normalized_term or not normalized_selection:
+        return False
     if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9' -]*", normalized_term):
         pattern = rf"(?<!\w){re.escape(normalized_term)}(?!\w)"
-        return re.search(pattern, normalized_selection) is not None
-    return normalized_term in normalized_selection
+        if re.search(pattern, normalized_selection):
+            return True
+    if normalized_term in normalized_selection:
+        return True
+    # Soft match: models may add quotes/ellipsis the page does not have.
+    import unicodedata
+
+    def key(value: str) -> str:
+        text = unicodedata.normalize("NFKC", value).translate(
+            str.maketrans({"’": "'", "‘": "'", "“": '"', "”": '"', "…": "...", " ": " "})
+        )
+        return re.sub(r"\s+", " ", text).strip().casefold()
+
+    return key(normalized_term) in key(normalized_selection)
 
 
 def _vocabulary(raw: str, selection: str) -> _Vocabulary:
@@ -103,16 +117,15 @@ class VocabularyExtension:
         if not context.selection.strip():
             raise ValueError("Vocabulary help requires selected text.")
 
+        from deeptutor.reading._grounding import complete_json
         from deeptutor.services.model_selection.tasks import task_llm_scope
 
         with task_llm_scope():
-            raw = await complete(
+            raw = await complete_json(
                 prompt=_prompt(context),
                 system_prompt=_SYSTEM_ZH if _is_zh(context.locale) else _SYSTEM_EN,
+                max_tokens=1500,
                 temperature=0.2,
-                max_tokens=800,
-                max_retries=0,
-                response_format={"type": "json_object"},
             )
         vocabulary = _vocabulary(raw, context.selection)
         return ReadingExtensionResult(

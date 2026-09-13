@@ -105,16 +105,15 @@ class TranslationExtension:
         if not context.selection.strip():
             raise ValueError("Translation requires selected text.")
 
+        from deeptutor.reading._grounding import complete_json
         from deeptutor.services.model_selection.tasks import task_llm_scope
 
         with task_llm_scope():
-            raw = await complete(
+            raw = await complete_json(
                 prompt=_prompt(context),
                 system_prompt=_SYSTEM_ZH if target_language == "zh" else _SYSTEM_EN,
+                max_tokens=4000,
                 temperature=0.1,
-                max_tokens=5_000,
-                max_retries=0,
-                response_format={"type": "json_object"},
             )
         translation = _translation(raw, target_language)
         is_zh = target_language == "zh"

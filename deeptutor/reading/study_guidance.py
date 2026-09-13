@@ -77,16 +77,15 @@ class StudyGuidanceExtension:
         if not context.selection.strip():
             raise ValueError("Study guidance requires selected text.")
 
+        from deeptutor.reading._grounding import complete_json
         from deeptutor.services.model_selection.tasks import task_llm_scope
 
         with task_llm_scope():
-            raw = await complete(
+            raw = await complete_json(
                 prompt=_prompt(context),
                 system_prompt=_SYSTEM_ZH if _is_zh(context.locale) else _SYSTEM_EN,
+                max_tokens=1200,
                 temperature=0.2,
-                max_tokens=500,
-                max_retries=0,
-                response_format={"type": "json_object"},
             )
         guidance = _guidance(raw)
         return ReadingExtensionResult(
