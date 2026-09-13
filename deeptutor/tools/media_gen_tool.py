@@ -374,13 +374,21 @@ class TtsSpeakTool(BaseTool):
             audio = _pcm16_to_wav(audio, sample_rate=rate, channels=channels)
             content_type = "audio/wav"
 
-        run_dir = _run_dir(kwargs.get("_workspace_dir"), "tts")
+        workspace_id = str(kwargs.get("_workspace_id") or "")
+        run_dir, workspace_id = _run_dir(
+            kwargs.get("_workspace_dir"), "tts", workspace_id=workspace_id
+        )
         artifacts = _write_media(
-            run_dir, [(audio, content_type)], stem=_slug(text, "speech"), default_ext="mp3"
+            run_dir,
+            [(audio, content_type)],
+            stem=_slug(text, "speech"),
+            default_ext="mp3",
+            workspace_id=workspace_id,
         )
         result = _artifact_result(
             artifacts,
             empty_message="Speech synthesis produced no saved files.",
+            workspace_id=workspace_id,
             text=text[:200],
             kind="speech",
         )
