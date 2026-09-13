@@ -61,7 +61,7 @@ class ReadAloudExtension:
     def _synthesize_url(self, text: str) -> str:
         """Run the configured voice engine and write a publicly servable file."""
         from deeptutor.services.voice import synthesize_speech
-        from deeptutor.tools.media_gen_tool import _run_dir, _write_media
+        from deeptutor.tools.media_gen_tool import _voice_run_dir, _write_media
 
         result = synthesize_speech(text)
         if inspect.isawaitable(result):
@@ -81,7 +81,9 @@ class ReadAloudExtension:
         if not audio:
             return ""
         ext = "mp3" if "mpeg" in (content_type or "") else "wav"
-        run_dir, _ = _run_dir(None, "tts")
+        from deeptutor.tools.media_gen_tool import _voice_run_dir
+
+        run_dir = _voice_run_dir()
         artifacts = _write_media(
             run_dir,
             [(audio, content_type)],

@@ -82,6 +82,24 @@ def _run_dir(injected: str | None, kind: str, *, workspace_id: str = "") -> tupl
     return run, workspace_id
 
 
+def _voice_run_dir() -> Path:
+    """Chat-history media_gen dir that ``/files/outputs`` will actually serve.
+
+    Voice banners need a playable URL on the same turn. Workspace-bound
+    ``outputs/...`` paths are intentionally not public (url="") until
+    workspace_present, which the banner never calls — and they are also
+    outside the ``resolve_public_output_path`` allowlist. Write under
+    ``workspace/chat/chat/media_gen/media/`` instead, matching the URL shape
+    of every historical working voice attachment.
+    """
+    from deeptutor.services.path_service import get_path_service
+
+    base = get_path_service().get_workspace_dir() / "chat" / "chat" / "media_gen" / "media"
+    run = base / f"tts_{uuid.uuid4().hex[:12]}"
+    run.mkdir(parents=True, exist_ok=True)
+    return run
+
+
 def _write_media(
     run_dir: Path,
     media: list[tuple[bytes, str]],
@@ -374,12 +392,8 @@ class TtsSpeakTool(BaseTool):
             audio = _pcm16_to_wav(audio, sample_rate=rate, channels=channels)
             content_type = "audio/wav"
 
-        # Collect under the public outputs root (no workspace binding) so the
-        # voice banner gets a playable /files/outputs URL immediately. Binding
-        # to the chat workspace leaves url="" until workspace_present, which
-        # the banner never calls — and an empty workspace_items object in the
-        # stored tool_metadata used to crash the chat page on load.
-        run_dir, _ = _run_dir(kwargs.get("_workspace_dir") or None, "tts")
+        # Public media_gen path → playable /files/outputs URL for the banner.
+        run_dir = _voice_run_dir()
         artifacts = _write_media(
             run_dir,
             [(audio, content_type)],

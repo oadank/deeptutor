@@ -998,7 +998,7 @@ class TurnExecutor:
                     # 这个根；之前写到 media_gen/tts/ 下扫出来永远是空（生成了
                     # 音频却挂不上消息，变成孤儿文件）。
                     from deeptutor.tools.media_gen_tool import (
-                        _run_dir,
+                        _voice_run_dir,
                         _write_media,
                     )
 
@@ -1006,10 +1006,11 @@ class TurnExecutor:
                         voice_text
                     )
                     ext = "mp3" if "mpeg" in (audio_content_type or "") else "wav"
-                    # Unpack the path (v1.6.x _run_dir returns a tuple) but do
-                    # NOT bind the write to the chat workspace — that leaves
-                    # artifact.url empty and the voice banner cannot play.
-                    run_dir, _ = _run_dir(None, "tts")
+                    # Public media_gen path so the banner gets a playable URL
+                    # (workspace-bound outputs leave url="" and 404).
+                    from deeptutor.tools.media_gen_tool import _voice_run_dir
+
+                    run_dir = _voice_run_dir()
                     artifacts = _write_media(
                         run_dir,
                         [(audio_bytes, audio_content_type)],
