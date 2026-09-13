@@ -105,7 +105,11 @@ export function extractStreamedArtifacts(
         }>;
       };
     };
-    const workspaceItems = meta.tool_metadata?.workspace_items ?? [];
+    // Historical tool metadata once serialized an empty object instead of []
+    // (seen on tts_speak). `for…of {}` throws and takes the whole page down
+    // via the error boundary — treat any non-array as "no workspace items".
+    const rawWorkspaceItems = meta.tool_metadata?.workspace_items;
+    const workspaceItems = Array.isArray(rawWorkspaceItems) ? rawWorkspaceItems : [];
     for (const item of workspaceItems) {
       if (!item?.url || !item.workspace_item_id) continue;
       out.push({
@@ -125,7 +129,9 @@ export function extractStreamedArtifacts(
       });
     }
     if (workspaceItems.length) continue;
-    for (const a of meta.tool_metadata?.artifacts ?? []) {
+    const rawArtifacts = meta.tool_metadata?.artifacts;
+    const artifacts = Array.isArray(rawArtifacts) ? rawArtifacts : [];
+    for (const a of artifacts) {
       if (!a?.url) continue;
       const attachment: MessageAttachment = {
         type: a.mime_type?.startsWith("image/")

@@ -81,13 +81,13 @@ class ReadAloudExtension:
         if not audio:
             return ""
         ext = "mp3" if "mpeg" in (content_type or "") else "wav"
-        run_dir, workspace_id = _run_dir(None, "tts")
+        run_dir, _ = _run_dir(None, "tts")
         artifacts = _write_media(
             run_dir,
             [(audio, content_type)],
             stem=f"read_aloud_{uuid.uuid4().hex[:8]}",
             default_ext=ext,
-            workspace_id=workspace_id,
+            workspace_id="",
         )
         if not artifacts:
             return ""

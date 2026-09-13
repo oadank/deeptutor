@@ -1006,13 +1006,16 @@ class TurnExecutor:
                         voice_text
                     )
                     ext = "mp3" if "mpeg" in (audio_content_type or "") else "wav"
-                    run_dir, workspace_id = _run_dir(None, "tts")
+                    # Unpack the path (v1.6.x _run_dir returns a tuple) but do
+                    # NOT bind the write to the chat workspace — that leaves
+                    # artifact.url empty and the voice banner cannot play.
+                    run_dir, _ = _run_dir(None, "tts")
                     artifacts = _write_media(
                         run_dir,
                         [(audio_bytes, audio_content_type)],
                         stem="voice-reply",
                         default_ext=ext,
-                        workspace_id=workspace_id,
+                        workspace_id="",
                     )
                     voice_reply_attachments = [
                         {

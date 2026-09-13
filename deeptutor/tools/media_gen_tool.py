@@ -374,21 +374,23 @@ class TtsSpeakTool(BaseTool):
             audio = _pcm16_to_wav(audio, sample_rate=rate, channels=channels)
             content_type = "audio/wav"
 
-        workspace_id = str(kwargs.get("_workspace_id") or "")
-        run_dir, workspace_id = _run_dir(
-            kwargs.get("_workspace_dir"), "tts", workspace_id=workspace_id
-        )
+        # Collect under the public outputs root (no workspace binding) so the
+        # voice banner gets a playable /files/outputs URL immediately. Binding
+        # to the chat workspace leaves url="" until workspace_present, which
+        # the banner never calls — and an empty workspace_items object in the
+        # stored tool_metadata used to crash the chat page on load.
+        run_dir, _ = _run_dir(kwargs.get("_workspace_dir") or None, "tts")
         artifacts = _write_media(
             run_dir,
             [(audio, content_type)],
             stem=_slug(text, "speech"),
             default_ext="mp3",
-            workspace_id=workspace_id,
+            workspace_id="",
         )
         result = _artifact_result(
             artifacts,
             empty_message="Speech synthesis produced no saved files.",
-            workspace_id=workspace_id,
+            workspace_id="",
             text=text[:200],
             kind="speech",
         )
