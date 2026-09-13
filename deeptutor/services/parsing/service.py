@@ -83,12 +83,52 @@ class ParseService:
         signature. Raises :class:`ParserError` when the engine is not ready
         (e.g. local models not downloaded and auto-download disabled) or the
         file type is unsupported.
+
+        PDFs that the active engine rejects (anydoc's "needs OCR" gate on
+        lightly-scanned textbooks, for example) fall back once to PyMuPDF4LLM
+        when that engine can still pull a text layer — without this, a
+        textbook PDF that immersive reading handles fine would index as empty.
         """
+        primary = (engine or self.active_engine()).strip().lower()
+        try:
+            return self._parse_with_engine(
+                source_path, primary, on_output=on_output, engine_explicit=engine is not None
+            )
+        except ParserError:
+            if engine is not None:
+                raise
+            path = Path(source_path)
+            if path.suffix.lower() != ".pdf":
+                raise
+            from deeptutor.services.config.runtime_settings import (
+                DOCUMENT_PARSING_ENGINE_PYMUPDF4LLM,
+            )
+
+            fallback = str(DOCUMENT_PARSING_ENGINE_PYMUPDF4LLM).strip().lower()
+            if fallback == primary:
+                raise
+            logger.warning(
+                "Parser %s failed for %s — falling back to %s",
+                primary,
+                path.name,
+                fallback,
+            )
+            return self._parse_with_engine(
+                source_path, fallback, on_output=on_output, engine_explicit=False
+            )
+
+    def _parse_with_engine(
+        self,
+        source_path: str | Path,
+        engine_name: str,
+        *,
+        on_output: Optional[Callable[[str], None]],
+        engine_explicit: bool,
+    ) -> ParsedDocument:
         source_path = Path(source_path)
         if not source_path.is_file():
             raise ParserError(f"File to parse not found: {source_path}")
 
-        engine_name = (engine or self.active_engine()).strip().lower()
         parser = get_parser(engine_name)
         config = parser.resolve_config()
 
