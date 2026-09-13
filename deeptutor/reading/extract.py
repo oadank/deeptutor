@@ -110,6 +110,50 @@ def extract_material(path: str | Path) -> Extraction:
 # PDF
 # ---------------------------------------------------------------------------
 
+# Textbook pinyin often uses a custom face (e.g. HanyuXi-JZ) whose glyph
+# codes are not the Unicode letters they look like. PyMuPDF then returns
+# pure-ASCII garbage such as ``yWn`` for ``yán``. Real toned pinyin is
+# non-ASCII; a pure-ASCII “pinyin” line under a CJK line is the tell.
+_CJK_RUN = re.compile(r"[一-鿿]+")
+_ASCII_PINYIN = re.compile(r"^[A-Za-z]{1,12}$")
+
+
+def _looks_like_garbled_pinyin(line: str) -> bool:
+    stripped = line.strip()
+    return bool(stripped) and bool(_ASCII_PINYIN.fullmatch(stripped))
+
+
+def _fix_pinyin_lines(text: str) -> str:
+    """Replace custom-font pinyin with pypinyin for the CJK above it."""
+    if not text:
+        return text
+    rows = text.split("\n")
+    if not any(_looks_like_garbled_pinyin(rows[i]) for i in range(len(rows) - 1)):
+        return text
+    try:
+        from pypinyin import Style, lazy_pinyin
+    except ImportError:
+        return text
+
+    out: list[str] = []
+    index = 0
+    while index < len(rows):
+        line = rows[index]
+        if (
+            index + 1 < len(rows)
+            and _CJK_RUN.search(line)
+            and _looks_like_garbled_pinyin(rows[index + 1])
+        ):
+            han = "".join(_CJK_RUN.findall(line))
+            toned = "".join(lazy_pinyin(han, style=Style.TONE)) if han else ""
+            out.append(line)
+            out.append(toned if toned else rows[index + 1])
+            index += 2
+            continue
+        out.append(line)
+        index += 1
+    return "\n".join(out)
+
 
 def _extract_pdf(source: Path) -> Extraction:
     try:
@@ -121,7 +165,7 @@ def _extract_pdf(source: Path) -> Extraction:
         with pymupdf.open(source) as doc:
             if doc.is_encrypted and not doc.authenticate(""):
                 raise ReadingError(f"{source.name} is encrypted and cannot be read")
-            units = tuple((page.get_text() or "") for page in doc)
+            units = tuple(_fix_pinyin_lines(page.get_text() or "") for page in doc)
             outline = _pdf_outline(doc, page_count=len(units))
             title = str((doc.metadata or {}).get("title") or "").strip()
     except ReadingError:
