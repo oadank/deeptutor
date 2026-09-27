@@ -196,9 +196,9 @@ export interface SessionViewerPanelHandle {
   /**
    * Opens (first time) or live-updates a connected subagent's run tab.
    *
-   * 4th arg is either `{ autoOpen?: boolean }` (legacy local) or a boolean
-   * focus flag (upstream). `autoOpen === false` only builds/updates the tab
-   * without stealing focus — history replay must not yank the panel open.
+   * 4th arg: `{ autoOpen?: boolean }` (local) or boolean focus (upstream).
+   * `autoOpen === false` only builds/updates the tab without stealing focus
+   * — history replay must not yank the panel open.
    */
   openSubagentTab(
     callId: string,
@@ -597,7 +597,8 @@ function SessionViewerPanelInner(
       // [2026-09-04] only a live running turn steals focus + opens the panel;
       // history replay builds the tab silently. Boolean 4th arg = force open.
       const forceOpen = typeof opts === "boolean" ? opts : false;
-      const autoOpenOk = typeof opts === "object" && opts ? opts.autoOpen !== false : true;
+      const autoOpenOk =
+        typeof opts === "object" && opts ? opts.autoOpen !== false : true;
       if (forceOpen || (isNew && autoOpenOk)) {
         setActiveTabId(id);
         onAutoOpen();
@@ -712,18 +713,20 @@ function SessionViewerPanelInner(
      paint and follows an orientation change for free — the var-driven width
      and its drag handle stay desktop-only machinery. The slide, the inset
      sheet shape, and the shadow live in `.dt-viewer-panel` (globals.css).
-     // [2026-09-03] closed panel must be inert: it stays mounted and is only
-     // translated off-screen; leftover focusable children trap keyboard focus
-     // and trip Chrome's aria-hidden warning. inert fixes both (React 19).
+     [2026-09-03] closed panel must be inert: it stays mounted and is only
+     translated off-screen; leftover focusable children trap keyboard focus
+     and trip Chrome's aria-hidden warning. inert fixes both (React 19). */
   return (
     <div
       role="dialog"
       aria-hidden={!visible}
-     and its drag handle stay desktop-only machinery. The slide, the inset
-     sheet shape, and the shadow live in `.dt-viewer-panel` (globals.css).
-     // [2026-09-03] closed panel must be inert: it stays mounted and is only
-     // translated off-screen; leftover focusable children trap keyboard focus
-     // and trip Chrome's aria-hidden warning. inert fixes both (React 19).
+      inert={!visible}
+      data-open={visible ? "true" : "false"}
+      className={`dt-viewer-panel fixed right-0 top-0 z-[30] flex h-dvh flex-col border-l border-[var(--border)] bg-[var(--card)] max-md:!w-full md:max-w-[92vw] transition-transform ease-in-out ${
+        // shadow-2xl only while visible — when closed the blurred shadow still
+        // bleeds onto the viewport edge; dropping it off-screen kills that sliver.
+        visible ? "translate-x-0 shadow-2xl" : "translate-x-full"
+      }`}
       style={{
         // Constant string (not a state value) so SSR and the first client
         // render agree; the real width lives in the var, updated imperatively.

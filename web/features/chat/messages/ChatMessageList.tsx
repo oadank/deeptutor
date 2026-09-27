@@ -1231,6 +1231,1329 @@ function MessageTime({ value }: { value: number }) {
     </span>
   );
 }
+
+// Claude-style icon-only message action: a quiet 15px glyph with the label
+// in an instant tooltip, brightening on hover.
+// [local patch 2026-09-02] 全局音频互斥：同一时刻只允许一个语音在播
+// （覆盖挂 DOM 的横幅 <audio> 和不挂 DOM 的 new Audio() 喇叭朗读）。
+function VoiceBanner({
+  src,
+  transcript,
+  label,
+  onCopy,
+}: {
+  src: string | null;
+  transcript?: string;
+  label: string;
+  onCopy?: (content: string) => void | Promise<void>;
+}) {
+  const { t } = useTranslation();
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const [playing, setPlaying] = useState(false);
+  const [seconds, setSeconds] = useState<number | null>(null);
+  const [copied, setCopied] = useState(false);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+    };
+  }, []);
+
+  const toggle = () => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    if (playing) {
+      audio.pause();
+    } else {
+      pauseOtherAudio(audio);
+      // [2026-09-03 修] 语音文件（手机录音 mp4，moov 在尾部）首次点击时数据往往
+      // 还没缓冲够，play() 静默失败——用户必须点第二次。捕获后延迟重试一次。
+      audio.play().catch(() => {
+        setTimeout(() => {
+          audio.play().catch(() => setPlaying(false));
+        }, 400);
+      });
+    }
+  };
+
+  const copyTranscript = () => {
+    // [local patch 2026-09-03] 没有外部回调时直接用剪贴板 API，
+    // 保证复制按钮在任何调用点都能用。
+    if (!transcript) return;
+    const done = () => {
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    };
+    if (onCopy) {
+      void Promise.resolve(onCopy(transcript)).then(done);
+      return;
+    }
+    void navigator.clipboard?.writeText(transcript).then(done).catch(() => {});
+  };
+
+  return (
+    <div
+      // [local patch 2026-09-02] 对齐 dsh TtsVoiceCard：44px 高 pill、28px 圆形
+      // 播放钮、inline-flex 自适应宽度（transcript 有则显示、无则纯 pill）。
+      className="inline-flex min-h-11 max-w-[min(520px,90%)] items-center gap-2 rounded-2xl border border-[var(--border)] bg-[var(--secondary)] px-3 py-2 shadow-sm"
+    >
+      <button
+        type="button"
+        onClick={toggle}
+        aria-label={playing ? t("Pause") : t("Play")}
+        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[var(--primary)] text-[var(--primary-foreground)] transition hover:opacity-90"
+      >
+        {playing ? (
+          <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden>
+            <rect x="3.5" y="3.5" width="3" height="9" rx="1" fill="currentColor" />
+            <rect x="9.5" y="3.5" width="3" height="9" rx="1" fill="currentColor" />
+          </svg>
+        ) : (
+          <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden>
+            <path d="M5 3.5L12.5 8L5 12.5V3.5Z" fill="currentColor" />
+          </svg>
+        )}
+      </button>
+      <span className="shrink-0 text-[11px] font-medium text-[var(--muted-foreground)]">
+        {seconds === null ? "" : `${seconds}s`}
+      </span>
+      {/* [local patch 2026-09-03] 对齐 dsh 横幅：口语稿**单行**显示，超出
+          部分省略；悬停看全文（title），点复制按钮拿全文。 */}
+      <span
+        className="min-w-0 flex-1 truncate text-[12.5px] text-[var(--foreground)]"
+        title={transcript || label}
+      >
+        {transcript || label}
+      </span>
+      {transcript && (
+        <button
+          type="button"
+          onClick={copyTranscript}
+          aria-label={t("Copy")}
+          className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[var(--muted-foreground)] transition hover:bg-[var(--muted)]/50 hover:text-[var(--foreground)]"
+        >
+          {copied ? <Check size={13} /> : <Copy size={13} />}
+        </button>
+      )}
+      <audio
+        ref={audioRef}
+        src={src ?? undefined}
+        // [2026-09-03 修] metadata → auto：语音文件小（几十~几百 KB），挂载即预取，
+        // 否则首次点击时才开始拉数据 + mp4 moov 在尾部 → 第一次播放必失败。
+        preload="auto"
+        className="hidden"
+        onPlay={() => setPlaying(true)}
+        onPause={() => setPlaying(false)}
+        onEnded={() => setPlaying(false)}
+        onLoadedMetadata={(e) => {
+          const d = e.currentTarget.duration;
+          setSeconds(Number.isFinite(d) ? Math.max(1, Math.ceil(d)) : null);
+        }}
+      />
+    </div>
+  );
+}
+
+export function pauseOtherAudio(current: HTMLAudioElement) {
+  const w = window as typeof window & { __dtActiveAudio?: HTMLAudioElement };
+  if (w.__dtActiveAudio && w.__dtActiveAudio !== current) {
+    try {
+      w.__dtActiveAudio.pause();
+    } catch {
+      // ignore
+    }
+  }
+  w.__dtActiveAudio = current;
+}
+
+export function RoughActionButton({
+  icon: Icon,
+  label,
+  onClick,
+  disabled,
+}: {
+  icon: LucideIcon;
+  label: string;
+  onClick: () => void;
+  disabled?: boolean;
+}) {
+  return (
+    <Tooltip label={label} side="top">
+      <button
+        type="button"
+        onClick={onClick}
+        disabled={disabled}
+        aria-label={label}
+        className="inline-flex items-center justify-center rounded-md p-1 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)]/50 hover:text-[var(--foreground)] disabled:cursor-not-allowed disabled:opacity-35"
+      >
+        <Icon size={15} strokeWidth={1.5} />
+      </button>
+    </Tooltip>
+  );
+}
+
+/**
+ * ``Promise<void>`` and not ``void | Promise<void>``: this button reports
+ * success to the user, so it needs a handler that can tell it about failure.
+ * A synchronously-void handler has no way to, which is how a swallowed
+ * clipboard error came to be rendered as 已复制.
+ */
+type CopyHandler = (content: string) => Promise<void>;
+
+export function CopyActionButton({
+  content,
+  onCopy,
+}: {
+  content: string;
+  onCopy: CopyHandler;
+}) {
+  const { t } = useTranslation();
+  const [outcome, setOutcome] = useState<"idle" | "copied" | "failed">("idle");
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (timerRef.current) clearTimeout(timerRef.current);
+    };
+  }, []);
+
+  const handleClick = useCallback(() => {
+    const settle = (next: "copied" | "failed") => {
+      setOutcome(next);
+      if (timerRef.current) clearTimeout(timerRef.current);
+      timerRef.current = setTimeout(() => setOutcome("idle"), 1600);
+    };
+    // `Promise.resolve().then(() => onCopy(...))` rather than
+    // `Promise.resolve(onCopy(...))`: the latter runs the handler outside the
+    // chain, so a *synchronous* throw — which is exactly what reading
+    // `navigator.clipboard.writeText` on an insecure origin does — escapes it.
+    void Promise.resolve()
+      .then(() => onCopy(content))
+      .then(
+        () => settle("copied"),
+        () => settle("failed"),
+      );
+  }, [content, onCopy]);
+
+  const label =
+    outcome === "copied"
+      ? t("Copied")
+      : outcome === "failed"
+        ? t("Could not copy")
+        : t("Copy");
+
+  return (
+    <Tooltip label={label} side="top">
+      <button
+        type="button"
+        onClick={handleClick}
+        aria-live="polite"
+        aria-label={label}
+        className={`inline-flex items-center justify-center rounded-md p-1 transition-colors ${
+          outcome === "copied"
+            ? "text-[var(--primary)]"
+            : outcome === "failed"
+              ? "text-[var(--destructive)]"
+              : "text-[var(--muted-foreground)] hover:bg-[var(--muted)]/50 hover:text-[var(--foreground)]"
+        }`}
+      >
+        {outcome === "copied" ? (
+          <Check size={15} strokeWidth={2} />
+        ) : outcome === "failed" ? (
+          <X size={15} strokeWidth={2} />
+        ) : (
+          <Copy size={15} strokeWidth={1.5} />
+        )}
+      </button>
+    </Tooltip>
+  );
+}
+
+// Speaker button: synthesizes the reply via the configured TTS provider and
+// plays it. On the first manual play of a session it offers to auto-play the
+// rest; `autoPlayFresh` triggers playback automatically for a reply that just
+// finished generating when auto-play is on.
+export function PlayAudioButton({
+  content,
+  conversationKey,
+  autoPlayFresh,
+}: {
+  content: string;
+  conversationKey?: string;
+  autoPlayFresh: boolean;
+}) {
+  const { t } = useTranslation();
+  const {
+    autoplayEnabled,
+    enableForSession,
+    markPrompted,
+    shouldPromptOnFirstPlay,
+  } = useVoiceAutoplay(conversationKey);
+  const [state, setState] = useState<"idle" | "loading" | "playing">("idle");
+  const [showPrompt, setShowPrompt] = useState(false);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const urlRef = useRef<string | null>(null);
+  const autoPlayedRef = useRef(false);
+
+  const cleanup = useCallback(() => {
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current = null;
+    }
+    if (urlRef.current) {
+      URL.revokeObjectURL(urlRef.current);
+      urlRef.current = null;
+    }
+  }, []);
+
+  const play = useCallback(async () => {
+    setState("loading");
+    try {
+      const resp = await apiFetch(apiUrl("/api/voice/tts"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: content }),
+      });
+      if (!resp.ok) {
+        cleanup();
+        setState("idle");
+        return;
+      }
+      const blob = await resp.blob();
+      cleanup();
+      const url = URL.createObjectURL(blob);
+      urlRef.current = url;
+      const audio = new Audio(url);
+      audioRef.current = audio;
+      pauseOtherAudio(audio);
+      audio.onended = () => {
+        setState("idle");
+        cleanup();
+      };
+      audio.onerror = () => {
+        setState("idle");
+        cleanup();
+      };
+      await audio.play();
+      setState("playing");
+    } catch {
+      cleanup();
+      setState("idle");
+    }
+  }, [cleanup, content]);
+
+  const handleClick = useCallback(() => {
+    if (state === "playing" || state === "loading") {
+      cleanup();
+      setState("idle");
+      return;
+    }
+    const willPrompt = shouldPromptOnFirstPlay();
+    void play();
+    if (willPrompt) {
+      markPrompted();
+      setShowPrompt(true);
+    }
+  }, [cleanup, markPrompted, play, shouldPromptOnFirstPlay, state]);
+
+  // Auto-play a freshly-generated reply when enabled, exactly once. Deferred
+  // to a timer so synthesis (which sets state) starts off the effect body.
+  useEffect(() => {
+    if (!autoPlayFresh || !autoplayEnabled) return;
+    if (autoPlayedRef.current) return;
+    if (!content.trim()) return;
+    autoPlayedRef.current = true;
+    const id = window.setTimeout(() => void play(), 0);
+    return () => window.clearTimeout(id);
+  }, [autoPlayFresh, autoplayEnabled, content, play]);
+
+  useEffect(() => cleanup, [cleanup]);
+
+  return (
+    <div className="relative inline-flex">
+      <Tooltip
+        label={state === "playing" ? t("Stop") : t("Play aloud")}
+        side="top"
+      >
+        <button
+          type="button"
+          onClick={handleClick}
+          aria-label={state === "playing" ? t("Stop") : t("Play aloud")}
+          className={`inline-flex items-center justify-center rounded-md p-1 transition-colors ${
+            state === "playing"
+              ? "text-[var(--primary)]"
+              : "text-[var(--muted-foreground)] hover:bg-[var(--muted)]/50 hover:text-[var(--foreground)]"
+          }`}
+        >
+          {state === "loading" ? (
+            <Loader2 size={15} strokeWidth={1.8} className="animate-spin" />
+          ) : state === "playing" ? (
+            <Square size={13} strokeWidth={1.8} className="fill-current" />
+          ) : (
+            <Volume2 size={15} strokeWidth={1.5} />
+          )}
+        </button>
+      </Tooltip>
+      {showPrompt && (
+        <div className="absolute bottom-full left-0 z-30 mb-2 w-60 rounded-lg border border-[var(--border)] bg-[var(--card)] p-3 shadow-lg">
+          <p className="text-[12px] leading-relaxed text-[var(--foreground)]">
+            {t("Auto-play replies in this conversation?")}
+          </p>
+          <div className="mt-2.5 flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setShowPrompt(false)}
+              className="rounded-md px-2.5 py-1 text-[11.5px] text-[var(--muted-foreground)] hover:bg-[var(--muted)]/50 hover:text-[var(--foreground)]"
+            >
+              {t("Not now")}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                enableForSession();
+                setShowPrompt(false);
+              }}
+              className="rounded-md bg-[var(--primary)] px-2.5 py-1 text-[11.5px] font-medium text-[var(--primary-foreground)] hover:bg-[var(--primary)]/90"
+            >
+              {t("Turn on")}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function BranchNavigator({
+  info,
+  onSwitch,
+}: {
+  info: SiblingInfo;
+  onSwitch: (childId: number) => void;
+}) {
+  const { t } = useTranslation();
+  const prevIdx = info.index - 2; // 0-based prev index
+  const nextIdx = info.index; // 0-based next index
+  const prevId = prevIdx >= 0 ? info.siblingIds[prevIdx] : null;
+  const nextId =
+    nextIdx < info.siblingIds.length ? info.siblingIds[nextIdx] : null;
+  return (
+    <div className="inline-flex items-center gap-0.5 text-[10.5px] text-[var(--muted-foreground)]">
+      <button
+        type="button"
+        onClick={() => prevId !== null && onSwitch(prevId)}
+        disabled={prevId === null}
+        aria-label={t("Previous branch")}
+        className="rounded p-0.5 transition-colors hover:text-[var(--foreground)] disabled:cursor-not-allowed disabled:opacity-30"
+      >
+        <ChevronLeft size={12} strokeWidth={1.8} />
+      </button>
+      <span className="select-none tabular-nums">
+        {info.index} / {info.total}
+      </span>
+      <button
+        type="button"
+        onClick={() => nextId !== null && onSwitch(nextId)}
+        disabled={nextId === null}
+        aria-label={t("Next branch")}
+        className="rounded p-0.5 transition-colors hover:text-[var(--foreground)] disabled:cursor-not-allowed disabled:opacity-30"
+      >
+        <ChevronRight size={12} strokeWidth={1.8} />
+      </button>
+    </div>
+  );
+}
+
+function DeleteTurnButton({ onDelete }: { onDelete: () => void }) {
+  const { t } = useTranslation();
+  const [confirm, setConfirm] = useState(false);
+  if (!confirm) {
+    return (
+      <RoughActionButton
+        icon={Trash2}
+        label={t("Delete")}
+        onClick={() => setConfirm(true)}
+      />
+    );
+  }
+  return (
+    <div className="inline-flex items-center gap-1.5 text-[11px]">
+      <span className="text-[var(--muted-foreground)]">
+        {t("Delete this turn?")}
+      </span>
+      <button
+        type="button"
+        onClick={() => {
+          onDelete();
+          setConfirm(false);
+        }}
+        className="rounded-md px-1.5 py-0.5 font-medium text-[var(--destructive)] hover:bg-[var(--destructive)]/10"
+      >
+        {t("Delete")}
+      </button>
+      <button
+        type="button"
+        onClick={() => setConfirm(false)}
+        className="rounded-md px-1.5 py-0.5 font-medium text-[var(--muted-foreground)] hover:bg-[var(--muted)]/40"
+      >
+        {t("Cancel")}
+      </button>
+    </div>
+  );
+}
+
+export const UserMessage = memo(function UserMessage({
+  msg,
+  index,
+  onPreviewAttachment,
+  onCopy,
+  onEdit,
+  editDisabled,
+  siblingInfo,
+  onSwitchBranch,
+  availableKbNames,
+  showModeBadge,
+  onOpenConsultation,
+}: {
+  msg: ChatMessageItem;
+  index: number;
+  onPreviewAttachment?: (attachment: MessageAttachment) => void;
+  onCopy?: CopyHandler;
+  onEdit?: (messageId: number, newContent: string) => void;
+  editDisabled?: boolean;
+  siblingInfo?: SiblingInfo;
+  onSwitchBranch?: (parentMessageId: number | null, childId: number) => void;
+  /** Names of KBs confirmed to exist. Omitted when the KB list is unavailable. */
+  availableKbNames?: Set<string>;
+  /** Label the bubble with its capability. A single-capability surface
+   *  already names the mode in its own chrome. */
+  showModeBadge?: boolean;
+  onOpenConsultation?: () => void;
+}) {
+  const { t } = useTranslation();
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(msg.content);
+  const { isComposingRef, onCompositionStart, onCompositionEnd } =
+    useImeComposing();
+  // Connected subagents ride in knowledge_bases (same selection path) but are
+  // agents, not KBs — this maps a selected name to its backend kind so the
+  // reference chip can badge it with the agent's brand icon.
+  const agentKinds = useConnectedAgentKinds();
+  const consultation = useConsultationReference(msg.requestSnapshot?.config);
+  if (msg.content.startsWith("[Quiz Performance]")) return null;
+  // ``msg.id`` can be a negative client-side sentinel for optimistic
+  // (just-sent, not yet reconciled with the server) rows. We still allow
+  // the Edit button to surface — ``editMessage`` in the context handles
+  // the optimistic case by triggering a session reload to resolve the
+  // real id before submitting the branch.
+  const canEdit =
+    Boolean(onEdit) && typeof msg.id === "number" && !editDisabled;
+  const startEdit = () => {
+    if (!canEdit) return;
+    setDraft(msg.content);
+    setEditing(true);
+  };
+  const cancelEdit = () => {
+    setEditing(false);
+    setDraft(msg.content);
+  };
+  const submitEdit = () => {
+    const trimmed = draft.trim();
+    if (!trimmed || trimmed === msg.content) {
+      cancelEdit();
+      return;
+    }
+    if (typeof msg.id !== "number") return;
+    onEdit?.(msg.id, trimmed);
+    setEditing(false);
+  };
+
+  // Everything this turn carried — file attachments plus the request
+  // [local patch 2026-09-02] 语音横幅：用户消息里 audio 附件（麦克风录音）
+  // 渲染为可回放横幅，互斥播放；转写文本在下方正文正常显示。
+  const voiceAttachments = (msg.attachments ?? []).filter((a) => {
+    const mime = (a.mime_type || "").toLowerCase();
+    const fn = (a.filename || "").toLowerCase();
+    return mime.startsWith("audio/") || a.type === "audio" || /\.(webm|ogg|mp4|m4a)$/.test(fn);
+  });
+  // [local patch 2026-09-02] 语音消息：剥壳转写（dsh voiceAsText wrapper 只给 AI）
+  // [local patch 2026-09-03] 剥壳后为空（ASR 空转写）就传空串——VoiceBanner
+  // 自然回落显示 label（"语音消息"）。之前 `|| msg.content` 兜底会把
+  // 「[语音消息]」标记原文顶到横幅上，正是老大骂的"语音前面带括号前缀"。
+  const isVoiceMessage = voiceAttachments.length > 0;
+  const voiceTranscript = isVoiceMessage
+    ? msg.content
+        .replace(/^\[用户发送了一条语音[\s\S]*?识别内容：/, "")
+        .replace(/^\[语音消息\]\s*/, "")
+        .replace(/。?请调用 tts_speak[\s\S]*$/, "")
+        .trim()
+    : msg.content;
+
+  // snapshot's Space references — rendered as one collapsed tree under
+  // the bubble (the sent-message mirror of the composer's tree).
+  const snap = msg.requestSnapshot;
+  const refTreeItems: ContextTreeItem[] = [
+    ...(consultation ? [{
+      key: `${consultation.kind}-${consultation.id}`,
+      icon: consultation.kind === "partner_group" ? UsersRound : UserRound,
+      kind: t(consultation.kind === "partner_group" ? "Organize partner discussion" : "Ask partner"),
+      label: consultation.name,
+      onClick: onOpenConsultation,
+    }] : []),
+    ...(msg.attachments ?? []).map((a, ai): ContextTreeItem => {
+      const filename = a.filename || t("Attachment");
+      const spec = docIconFor(filename);
+      const src = a.type === "image" ? imageSrcForAttachment(a) : null;
+      return {
+        key: `att-${ai}`,
+        icon: spec.Icon,
+        kind: spec.label,
+        label: filename,
+        thumbnailUrl: src ?? undefined,
+        onClick: onPreviewAttachment ? () => onPreviewAttachment(a) : undefined,
+      };
+    }),
+    ...(snap?.knowledgeBases ?? [])
+      .filter(
+        (name) =>
+          !availableKbNames || availableKbNames.has(name) || agentKinds[name],
+      )
+      .map((name): ContextTreeItem => {
+        const agentKind = agentKinds[name];
+        if (agentKind) {
+          return {
+            key: `agent-${name}`,
+            // Brand SVG marks share the lucide call signature (size/strokeWidth/
+            // className); cast bridges the structural-variance gap.
+            icon: (agentGlyph(agentKind) ?? Bot) as unknown as LucideIcon,
+            kind: t("Ask subagent"),
+            label: name,
+            onClick: onOpenConsultation,
+          };
+        }
+        return {
+          key: `kb-${name}`,
+          icon: Database,
+          kind: t("Knowledge"),
+          label: name,
+        };
+      }),
+    ...(snap?.bookReferences ?? []).map((ref): ContextTreeItem => ({
+      key: `book-${ref.book_id}`,
+      icon: BookOpen,
+      kind: t("Book"),
+      label: `${ref.page_ids.length} ${t("chapters")}`,
+    })),
+    ...(snap?.readingReferences ?? []).map((ref): ContextTreeItem => ({
+      key: `reading-${ref.material_id}-r${ref.revision}`,
+      icon: BookMarked,
+      kind: t("Reading"),
+      label: `${ref.locators.length} ${t("reading sections")}`,
+    })),
+    ...(snap?.notebookReferences ?? []).map((ref): ContextTreeItem => ({
+      key: `nb-${ref.notebook_id}`,
+      icon: BookOpen,
+      kind: t("Notebook"),
+      label: `${ref.record_ids.length} ${t("records")}`,
+    })),
+    // Imported agent conversations are folded into the same history_references
+    // payload but carry the `imported_` id prefix — split them back out so they
+    // read as "My Agents" rather than "Chat History" (mirrors the composer).
+    ...(snap?.historyReferences ?? [])
+      .filter((sid) => !sid.startsWith("imported_"))
+      .map((sid): ContextTreeItem => ({
+        key: `hist-${sid}`,
+        icon: MessageSquare,
+        kind: t("Chat History"),
+        label: "",
+      })),
+    ...(snap?.historyReferences ?? [])
+      .filter((sid) => sid.startsWith("imported_"))
+      .map((sid): ContextTreeItem => ({
+        key: `agent-${sid}`,
+        icon: Bot,
+        kind: t("My Agents"),
+        label: "",
+      })),
+    ...(snap?.questionNotebookReferences?.length
+      ? [
+          {
+            key: "qb",
+            icon: ClipboardList,
+            kind: t("Question Bank"),
+            label: `${snap.questionNotebookReferences.length} ${t("items")}`,
+          } satisfies ContextTreeItem,
+        ]
+      : []),
+    ...(snap?.persona
+      ? [
+          {
+            key: "persona",
+            icon: UserRound,
+            kind: t("Persona"),
+            label: snap.persona,
+          } satisfies ContextTreeItem,
+        ]
+      : []),
+    ...(snap?.memoryReferences ?? []).map((file): ContextTreeItem => ({
+      key: `mem-${file}`,
+      icon: Brain,
+      kind: t("Memory"),
+      label: file === "summary" ? t("Summary") : t("Profile"),
+    })),
+  ];
+
+  return (
+    <div key={`${msg.role}-${index}`} className="group flex justify-end">
+      {/* ``data-turn-key`` is the scroll target the turn navigator jumps
+          to; ``data-turn-bubble`` is what it flashes on arrival. Both keys
+          come from ``turnAnchorKey`` so the rail and the transcript can
+          never disagree about which bubble a tick means. */}
+      <div
+        data-turn-key={turnAnchorKey(msg, index)}
+        className="flex max-w-[75%] flex-col items-end gap-1.5"
+      >
+        {showModeBadge && (
+          <div className="flex justify-end pr-1">
+            <span className="text-[10px] tracking-wide text-[var(--muted-foreground)]">
+              {t(getModeBadgeLabel(msg.capability))}
+            </span>
+          </div>
+        )}
+        {editing ? (
+          <div className="w-[min(620px,75vw)] rounded-2xl border border-[var(--primary)]/40 bg-[var(--secondary)] px-3 py-2.5 text-[14px] leading-relaxed text-[var(--foreground)] shadow-sm">
+            <textarea
+              autoFocus
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") {
+                  e.preventDefault();
+                  cancelEdit();
+                } else if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                  e.preventDefault();
+                  submitEdit();
+                } else if (shouldSubmitOnEnter(e, isComposingRef.current)) {
+                  e.preventDefault();
+                  submitEdit();
+                }
+              }}
+              onCompositionStart={onCompositionStart}
+              onCompositionEnd={onCompositionEnd}
+              rows={Math.min(8, Math.max(2, draft.split("\n").length))}
+              className="w-full resize-none border-0 bg-transparent text-[14px] leading-relaxed text-[var(--foreground)] outline-none focus:outline-none"
+            />
+            <div className="mt-1 flex items-center justify-between gap-2">
+              <span className="text-[10.5px] text-[var(--muted-foreground)]/80">
+                {t("Use the arrows below to switch between branches.")}
+              </span>
+              <div className="flex shrink-0 items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={cancelEdit}
+                  className="rounded-md px-2 py-0.5 text-[11px] font-medium text-[var(--muted-foreground)] hover:bg-[var(--muted)]/40"
+                >
+                  {t("Cancel")}
+                </button>
+                <button
+                  type="button"
+                  onClick={submitEdit}
+                  disabled={!draft.trim() || draft.trim() === msg.content}
+                  className="rounded-md bg-[var(--primary)] px-2.5 py-0.5 text-[11px] font-medium text-[var(--primary-foreground)] hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  {t("Send")}
+                </button>
+              </div>
+            </div>
+          </div>
+        ) : isVoiceMessage ? (
+          // [local patch 2026-09-02] 用户语音消息 = 一条语音横幅（回放原声 + 转写）
+          <VoiceBanner
+            src={
+              voiceAttachments.length > 0
+                ? imageSrcForAttachment(voiceAttachments[0])
+                : null
+            }
+            transcript={voiceTranscript}
+            label="语音消息"
+            onCopy={onCopy}
+          />
+        ) : (
+          <div
+            data-turn-bubble="true"
+            className="rounded-2xl bg-[var(--secondary)] px-4 py-2.5 text-[14px] leading-relaxed text-[var(--foreground)] shadow-sm"
+          >
+            {snap?.readingSelection ? (
+              <ReadingPassageQuote
+                quote={snap.readingSelection.quote}
+                href={
+                  snap.readingMaterialId && snap.readingSelection.locator
+                    ? readingPassageHref(
+                        snap.readingMaterialId,
+                        snap.readingSelection.locator,
+                        snap.readingMaterialRevision,
+                      )
+                    : undefined
+                }
+              />
+            ) : null}
+            <div className="whitespace-pre-wrap">{msg.content}</div>
+          </div>
+        )}
+        {!editing && refTreeItems.length > 0 && (
+          <div className="pr-1">
+            <ContextReferenceTree
+              items={refTreeItems}
+              direction="down"
+              align="right"
+              summaryNoun={t("attachments")}
+            />
+          </div>
+        )}
+        {!editing && (onCopy || canEdit || siblingInfo) && msg.content && (
+          <div className="flex h-7 items-center justify-end gap-1 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+            {siblingInfo && siblingInfo.total > 1 && (
+              <BranchNavigator
+                info={siblingInfo}
+                onSwitch={(childId) =>
+                  onSwitchBranch?.(siblingInfo.parentId, childId)
+                }
+              />
+            )}
+            {onCopy && (
+              <CopyActionButton content={msg.content} onCopy={onCopy} />
+            )}
+            {canEdit && (
+              <RoughActionButton
+                icon={Pencil}
+                label={t("Edit")}
+                onClick={startEdit}
+              />
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+});
+
+UserMessage.displayName = "UserMessage";
+
+/**
+ * The passage a reading question was asked about, at the top of its bubble.
+ *
+ * A link, not a label: it is written in the reader's citation form, so the
+ * reader's own capture-phase handler scrolls the document back to it.
+ */
+function ReadingPassageQuote({ quote, href }: { quote: string; href?: string }) {
+  const { t } = useTranslation();
+  const className =
+    "mb-1.5 block border-l-2 border-[color-mix(in_srgb,var(--primary)_45%,transparent)] pl-2.5 text-[12.5px] leading-relaxed text-[var(--muted-foreground)]";
+  const text = <span className="line-clamp-3">{quote}</span>;
+  return href ? (
+    <a
+      href={href}
+      title={t("Go to this passage")}
+      className={`${className} transition-colors hover:text-[var(--foreground)]`}
+    >
+      {text}
+    </a>
+  ) : (
+    <div className={className}>{text}</div>
+  );
+}
+
+export const ChatMessageList = memo(function ChatMessageList({
+  messages,
+  isStreaming,
+  sessionId,
+  language,
+  onCopyAssistantMessage,
+  onRegenerateMessage,
+  canResendLastTurn = false,
+  onResendLastTurn,
+  onConfirmOutline,
+  onPreviewAttachment,
+  onOpenConsultation,
+  onDeleteTurn,
+  selectedBranches,
+  onEditMessage,
+  onSwitchBranch,
+  availableKbNames,
+  onSubmitUserReply,
+  onAnswerMasteryQuestion,
+  onSkipMasteryQuestion,
+  showModeBadge = true,
+  onLoadMessageTrace,
+  onReleaseMessageTrace,
+}: {
+  messages: ChatMessageItem[];
+  isStreaming: boolean;
+  sessionId?: string | null;
+  language?: string;
+  onCopyAssistantMessage: CopyHandler;
+  onRegenerateMessage: () => void;
+  /** True when the last turn failed (not cancelled) and streaming has
+   *  stopped. Drives the Resend affordance on the trailing assistant. */
+  canResendLastTurn?: boolean;
+  onResendLastTurn?: () => void;
+  onConfirmOutline?: (
+    outline: Array<{ title: string; overview: string }>,
+    topic: string,
+    researchConfig?: Record<string, unknown> | null,
+    requestSnapshot?: MessageRequestSnapshot | null,
+  ) => void;
+  onPreviewAttachment?: (attachment: MessageAttachment) => void;
+  onOpenConsultation?: (events: StreamEvent[]) => void;
+  onDeleteTurn?: (messageId: number) => void;
+  /** Edit-branching: selected sibling at each branch point. */
+  selectedBranches?: Record<string, number>;
+  onEditMessage?: (messageId: number, newContent: string) => void;
+  onSwitchBranch?: (parentMessageId: number | null, childId: number) => void;
+  /**
+   * Deliver an ``ask_user`` reply back to the backend so the agentic
+   * loop resumes on the same turn. Forwarded into each
+   * ``AssistantMessage`` so the card UI rendered alongside the paused
+   * assistant bubble can submit selections / free-form text. Accepts
+   * either a string (legacy) or a structured object with per-question
+   * ``answers`` (v2).
+   */
+  onSubmitUserReply?: (
+    reply:
+      | string
+      | {
+          text?: string;
+          answers?: Array<{ questionId: string; text: string }>;
+        },
+  ) => void | boolean | Promise<void | boolean>;
+  /**
+   * Answer a mastery question card by starting the next turn (see
+   * ``AssistantMessage``). Separate from ``onSubmitUserReply`` because these
+   * cards outlive their turn by design.
+   */
+  onAnswerMasteryQuestion?: (answer: {
+    questionId: string;
+    text: string;
+  }) => void | boolean | Promise<void | boolean>;
+  /** Drop a question instead of answering it; also starts a turn. */
+  onSkipMasteryQuestion?: (
+    questionId: string,
+  ) => void | boolean | Promise<void | boolean>;
+  /** Names of KBs confirmed to exist. Omitted when the KB list is unavailable. */
+  availableKbNames?: Set<string>;
+  /** Label each user bubble with its capability. Off on surfaces that run a
+   *  single capability and already name it in their own chrome. */
+  showModeBadge?: boolean;
+  onLoadMessageTrace?: (messageId: number) => Promise<void>;
+  onReleaseMessageTrace?: (messageId: number) => void;
+}) {
+  const { t } = useTranslation();
+  // Visible path: when no branching has happened the result is identical
+  // to the input. After an edit, sibling branches are filtered out so the
+  // UI shows exactly one continuous thread, with arrow nav exposed on the
+  // user message where branching diverges.
+  const { messages: visibleMessages, siblingsByMessageId } = useMemo(
+    () => buildVisiblePath(messages, selectedBranches),
+    [messages, selectedBranches],
+  );
+
+  // Deep-research two-turn merge.
+  //
+  // The capability runs in two BE turns: turn-1 emits rephrase +
+  // decompose + an outline-preview result; turn-2 (after the user
+  // confirms the outline) emits the research blocks + the final
+  // report. The user wants both turns to live in ONE assistant
+  // bubble so the rephrase trace, the Q&A summary, the (collapsed)
+  // outline editor, and the research / reporting traces are all
+  // visually contiguous instead of split across two bubbles.
+  //
+  // For each parent (outline-preview) msg with a followup
+  // deep_research msg, we synthesise a merged msg with:
+  //
+  // * events  — parent.events ++ followup.events (preserving order
+  //   so TraceFlow's call_id grouping keeps working).
+  // * content — followup.content (the report). The parent's
+  //   rephrase preface is already represented inside the trace card,
+  //   so concatenating again would duplicate it above the report.
+  //
+  // The followup is dropped from the visible row list so only the
+  // merged bubble renders.
+  // One callback for every row rather than a closure per row per render.
+  // ``AssistantMessage`` is memoized, and a fresh function defeats that
+  // outright: every message in the conversation re-rendered on every streamed
+  // delta of the turn at the bottom.
+  const handleTraceToggle = useCallback(
+    (messageId: number, open: boolean) => {
+      if (open) {
+        void onLoadMessageTrace?.(messageId);
+      } else {
+        onReleaseMessageTrace?.(messageId);
+      }
+    },
+    [onLoadMessageTrace, onReleaseMessageTrace],
+  );
+
+  const deepResearchMergeMap = useMemo(() => {
+    const map = new Map<
+      number,
+      { mergedEvents: StreamEvent[]; mergedContent: string }
+    >();
+    const followupIndices = new Set<number>();
+    for (let i = 0; i < visibleMessages.length; i++) {
+      const msg = visibleMessages[i];
+      if (msg.role !== "assistant" || msg.capability !== "deep_research")
+        continue;
+      const resultEv = msg.events?.find((e) => e.type === "result");
+      const meta = resultEv?.metadata as Record<string, unknown> | undefined;
+      if (!meta?.outline_preview) continue;
+      const nextResearchAssistantIdx = visibleMessages
+        .slice(i + 1)
+        .findIndex(
+          (m) => m.role === "assistant" && m.capability === "deep_research",
+        );
+      if (nextResearchAssistantIdx === -1) continue;
+      const absoluteFollowupIdx = i + 1 + nextResearchAssistantIdx;
+      const followup = visibleMessages[absoluteFollowupIdx];
+      if (!isConfirmedResearchFollowup(followup.events)) continue;
+      const mergedEvents = [...(msg.events ?? []), ...(followup.events ?? [])];
+      const mergedContent = authoritativeResearchReport(
+        followup.events,
+        followup.content || msg.content,
+      );
+      map.set(i, { mergedEvents, mergedContent });
+      followupIndices.add(absoluteFollowupIdx);
+    }
+    return { mergedByParent: map, followupIndices };
+  }, [visibleMessages]);
+
+  // One pass for the whole conversation: a question posed in one turn can be
+  // graded in a later one, and the card that asked it shows the verdict.
+  const masteryGrades = useMemo(
+    () => collectMasteryGrades(visibleMessages),
+    [visibleMessages],
+  );
+  const masterySkips = useMemo(
+    () => collectMasterySkips(visibleMessages),
+    [visibleMessages],
+  );
+
+  const outlineStatusByIndex = useMemo(() => {
+    const map = new Map<
+      number,
+      "editing" | "researching" | "done" | "failed"
+    >();
+    for (let i = 0; i < visibleMessages.length; i++) {
+      const msg = visibleMessages[i];
+      if (msg.role !== "assistant" || msg.capability !== "deep_research")
+        continue;
+      const resultEv = msg.events?.find((e) => e.type === "result");
+      const meta = resultEv?.metadata as Record<string, unknown> | undefined;
+      if (!meta?.outline_preview) continue;
+      const followup = visibleMessages
+        .slice(i + 1)
+        .find(
+          (m) => m.role === "assistant" && m.capability === "deep_research",
+        );
+      if (followup && isConfirmedResearchFollowup(followup.events)) {
+        map.set(i, researchFollowupStatus(followup.events));
+      } else {
+        // The first deep_research turn only plans/rephrases/decomposes and
+        // returns an outline preview. While that turn is still flushing
+        // post-result events, the outline must already be editable; only the
+        // hidden follow-up turn created by "Start Research" means research is
+        // actually underway.
+        map.set(i, "editing");
+      }
+    }
+    return map;
+  }, [visibleMessages]);
+
+  const messageRows = useMemo(() => {
+    // System messages are backend grounding (e.g. quiz follow-up context) and
+    // must never be rendered as a chat bubble. Filter them out defensively in
+    // addition to the hydration-time filter in UnifiedChatContext.
+    return visibleMessages
+      .map((msg, index) => ({ msg, originalIndex: index }))
+      .filter(({ msg, originalIndex }) => {
+        if (msg.role === "system") return false;
+        // Drop deep_research followup msgs — their events were merged
+        // into the parent (outline-preview) bubble.
+        if (deepResearchMergeMap.followupIndices.has(originalIndex))
+          return false;
+        return true;
+      })
+      .map(({ msg, originalIndex }) => {
+        // Splice in the merged event stream when this row owns a
+        // deep_research two-turn pair.
+        const merged = deepResearchMergeMap.mergedByParent.get(originalIndex);
+        const effectiveMsg: ChatMessageItem = merged
+          ? {
+              ...msg,
+              events: merged.mergedEvents,
+              content: merged.mergedContent,
+            }
+          : msg;
+        if (effectiveMsg.role === "user") {
+          return {
+            msg: effectiveMsg,
+            originalIndex,
+            pairedUserMessage: null as ChatMessageItem | null,
+          };
+        }
+        const pairedUserMessage =
+          [...visibleMessages.slice(0, originalIndex)]
+            .reverse()
+            .find((previous) => previous.role === "user") ?? null;
+        return { msg: effectiveMsg, originalIndex, pairedUserMessage };
+      });
+  }, [visibleMessages, deepResearchMergeMap]);
+
+  const usageByRow = useMemo(() => {
+    const totals = cumulativeMessageUsage(messageRows.map(row => row.msg));
+    return new Map(messageRows.map((row, index) => [row.originalIndex, totals[index]]));
+  }, [messageRows]);
+
+  const lastRenderedAssistantIndex = useMemo(() => {
+    for (let idx = messageRows.length - 1; idx >= 0; idx -= 1) {
+      if (messageRows[idx].msg.role === "assistant")
+        return messageRows[idx].originalIndex;
+    }
+    return -1;
+  }, [messageRows]);
+
+  // Auto-play (when enabled) must fire only for a reply that JUST finished
+  // generating — never when loading history. We capture the last-assistant
+  // index at the moment streaming flips off; the matching speaker button
+  // plays once. Switching sessions clears the marker. Uses the "adjust state
+  // during render" pattern (state-vs-prop comparison, like the API-key reset
+  // in ServiceConfigEditor) — both branches are conditional and bounded.
+  const [prevStreaming, setPrevStreaming] = useState(isStreaming);
+  const [prevSession, setPrevSession] = useState(sessionId);
+  const [freshlyCompletedIndex, setFreshlyCompletedIndex] = useState<
+    number | null
+  >(null);
+  if (prevSession !== sessionId) {
+    setPrevSession(sessionId);
+    setPrevStreaming(false);
+    setFreshlyCompletedIndex(null);
+  } else if (prevStreaming !== isStreaming) {
+    setPrevStreaming(isStreaming);
+    if (!isStreaming && lastRenderedAssistantIndex >= 0) {
+      setFreshlyCompletedIndex(lastRenderedAssistantIndex);
+    }
+  }
+
+  return (
+    <>
+      {messageRows.map(({ msg, originalIndex, pairedUserMessage }, rowIndex) => {
+        const i = originalIndex;
+        if (msg.role === "user") {
+          const sib =
+            msg.id !== undefined ? siblingsByMessageId.get(msg.id) : undefined;
+          const reply = messageRows[rowIndex + 1]?.msg;
+          const consultationEvents = reply?.role === "assistant"
+            ? (reply.events ?? []).filter(event => event.metadata?.trace_kind === "subagent_event")
+            : [];
+          return (
+            <div
+              key={`${msg.role}-${i}`}
+              className="w-full"
+              data-chat-message-id={msg.id}
+              data-chat-message-role={msg.role}
+            >
+              <UserMessage
+                msg={msg}
+                index={i}
+                onPreviewAttachment={onPreviewAttachment}
+                onCopy={onCopyAssistantMessage}
+                onEdit={onEditMessage}
+                editDisabled={isStreaming}
+                siblingInfo={sib}
+                onSwitchBranch={onSwitchBranch}
+                availableKbNames={availableKbNames}
+                showModeBadge={showModeBadge}
+                onOpenConsultation={consultationEvents.length && onOpenConsultation
+                  ? () => onOpenConsultation(consultationEvents)
+                  : undefined}
+              />
+            </div>
+          );
+        }
+
+        const isActiveAssistant =
+          isStreaming && i === lastRenderedAssistantIndex;
+        const msgDone = !isActiveAssistant;
+        const showActions = msgDone && hasVisibleMarkdownContent(msg.content);
+        const events = msg.events ?? [];
+        const terminalError = [...events].reverse().find(
+          (event) => event.type === "error" && Boolean(event.metadata?.turn_terminal),
+        ) ?? (!hasVisibleMarkdownContent(msg.content)
+          ? [...events].reverse().find((event) => event.type === "error")
+          : undefined);
+        const stopped = terminalError?.metadata?.status === "cancelled" ||
+          events.some((event) => event.type === "done" && event.metadata?.status === "cancelled");
+        const emptyResponse = !hasVisibleMarkdownContent(msg.content) &&
+          !msg.attachments?.length &&
+          !events.some((event) => ["result", "tool_call", "tool_result", "wait_for_input"].includes(event.type));
+        const terminalErrorRetryable = Boolean(
+          (terminalError?.metadata as { retryable?: boolean } | undefined)
+            ?.retryable,
+        );
+        const isLastAssistant = i === lastRenderedAssistantIndex;
+        const showRegenerate =
+          !isStreaming &&
+          isLastAssistant &&
+          Boolean(pairedUserMessage) &&
+          (!pairedUserMessage?.capability ||
+            pairedUserMessage?.capability === "chat") &&
+          (showActions || terminalErrorRetryable);
+        const showResend =
+          !isStreaming &&
+          isLastAssistant &&
+          canResendLastTurn &&
+          Boolean(pairedUserMessage?.requestSnapshot) &&
+          Boolean(onResendLastTurn);
+        const deletableTurnUserId =
+          msgDone && pairedUserMessage?.id != null && onDeleteTurn
+            ? pairedUserMessage.id
+            : null;
+        const showDelete = deletableTurnUserId != null;
+
+        const costSummary = msgDone ? messageUsage(msg.events) : null;
+
+        return (
+          <div
+            key={`${msg.role}-${i}`}
+            className="w-full"
+            data-chat-message-id={msg.id}
+            data-chat-message-role={msg.role}
+          >
+            <InlineFileCardProvider
+              attachments={msg.attachments ?? []}
+              events={msg.events}
+              onOpen={onPreviewAttachment}
+            >
+              <AssistantMessage
+                msg={msg}
+                isStreaming={isActiveAssistant}
+                outlineStatus={outlineStatusByIndex.get(i)}
+                sessionId={sessionId}
+                language={language}
+                onConfirmOutline={onConfirmOutline}
+                onSubmitUserReply={onSubmitUserReply}
+                onAnswerMasteryQuestion={onAnswerMasteryQuestion}
+                onSkipMasteryQuestion={onSkipMasteryQuestion}
+                researchRequestSnapshot={
+                  pairedUserMessage?.requestSnapshot ?? null
+                }
+                onTraceToggle={handleTraceToggle}
+                masteryGrades={masteryGrades}
+                masterySkips={masterySkips}
+              />
+            </InlineFileCardProvider>
+            <GeneratedFileCards
+              attachments={msg.attachments ?? []}
+              events={msg.events}
+              onOpen={onPreviewAttachment}
+            />
+            {(() => {
+              // A turn that died (LLM/provider failure, interruption) ends
+              // with a turn_terminal error event. Surface it as an error
+              // card with an inline retry instead of leaving a bare trace.
+              if (isActiveAssistant) return null;
+              if (stopped) return (
+                <div role="status" className="mt-3 flex items-center gap-2 text-sm text-[var(--muted-foreground)]">
+                  <Square className="h-3.5 w-3.5" aria-hidden="true" />
+                  <span>{t("Stopped")}</span>
+                </div>
+              );
+              if (!terminalError && !emptyResponse) return null;
+              return (
+                <div role="alert" className="mt-3 flex w-full max-w-[min(520px,90%)] items-center gap-2 rounded-xl border border-[var(--destructive)]/30 bg-[var(--destructive)]/5 px-3 py-2">
+                  <AlertCircle className="h-4 w-4 shrink-0 text-[var(--destructive)]" />
+                  <span className="min-w-0 flex-1 text-[12px] leading-[1.5] text-[var(--foreground)]">
+                    {terminalError?.content || (terminalError
+                      ? t("The turn was interrupted.")
+                      : t("No response was generated. Please try again."))}
+                  </span>
+                  {showRegenerate ? (
+                    <button
+                      type="button"
+                      onClick={() => onRegenerateMessage()}
+                      className="shrink-0 rounded-md px-2 py-1 text-[11.5px] font-medium text-[var(--destructive)] hover:bg-[var(--destructive)]/10"
+                    >
+                      {t("Retry")}
+                    </button>
+                  ) : null}
+                  {showResend && !showRegenerate ? (
+                    <button
+                      type="button"
+                      onClick={() => onResendLastTurn?.()}
+                      className="shrink-0 rounded-md px-2 py-1 text-[11.5px] font-medium text-[var(--foreground)] hover:bg-[var(--muted)]"
+                    >
+                      {t("Resend")}
+                    </button>
+                  ) : null}
+                </div>
+              );
+            })()}
+            {(showActions || costSummary || showDelete) && (
+              <div className="mt-3 flex items-center">
+                {(showActions || showDelete) && (
+                  <div className="flex items-center gap-1">
+                    {showActions && (
+                      <CopyActionButton
+                        content={msg.content}
+                        onCopy={onCopyAssistantMessage}
+                      />
+                    )}
+                    {showActions && (
+                      <PlayAudioButton
+                        content={msg.content}
+                        conversationKey={sessionId ?? undefined}
+                        autoPlayFresh={
+                          isLastAssistant && freshlyCompletedIndex === i
+                        }
+                      />
+                    )}
+                    {showActions && showRegenerate && (
+                      <RoughActionButton
+                        icon={RefreshCcw}
+                        label={t("Regenerate")}
+                        onClick={() => onRegenerateMessage()}
+                      />
+                    )}
+                    {showResend && (
+                      <RoughActionButton
+                        icon={RefreshCcw}
+                        label={t("Resend")}
+                        onClick={() => onResendLastTurn?.()}
+                      />
+                    )}
+                    {showDelete && (
+                      <DeleteTurnButton
+                        onDelete={() => onDeleteTurn?.(deletableTurnUserId)}
+                      />
+                    )}
+                  </div>
+                )}
+                {(() => {
+                  // [local patch 2026-09-03] message timestamp — never fall
+                  // back to "now" (that becomes the page-load time).
+                  const raw =
+                    msg.createdAt ??
+                    (msg as { created_at?: number }).created_at ??
+                    null;
+                  if (raw != null) {
+                    return (
+                      <div className="ml-auto">
+                        <MessageTime value={raw} />
+                      </div>
+                    );
+                  }
+                  return null;
+                })()}
               </div>
             )}
           </div>
