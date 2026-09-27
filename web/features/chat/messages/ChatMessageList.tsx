@@ -1,7 +1,17 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { UsageFooter } from "./UsageFooter";
+import { cumulativeMessageUsage, messageUsage } from "./usage-summary";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import {
   BookMarked,
   BookOpen,
@@ -11,7 +21,6 @@ import {
   ChevronLeft,
   ChevronRight,
   ClipboardList,
-  Coins,
   Copy,
   AlertCircle,
   Database,
@@ -21,6 +30,7 @@ import {
   RefreshCcw,
   Square,
   UserRound,
+  UsersRound,
   Volume2,
   X,
   Trash2,
@@ -29,12 +39,13 @@ import {
 import { useTranslation } from "react-i18next";
 import type { SelectedHistorySession } from "@/components/chat/HistorySessionPicker";
 import type { SelectedQuestionEntry } from "@/components/chat/QuestionBankPicker";
+import { ActivityFold, FoldCaret } from "@/components/activity";
 import AssistantResponse from "@/components/common/AssistantResponse";
 import {
   InlineFileCardProvider,
   mergeGeneratedFiles,
 } from "@/components/common/InlineFileCard";
-import Tooltip from "@/components/common/Tooltip";
+import Tooltip from "@/shared/ui/Tooltip";
 import type {
   MessageAttachment,
   MessageRequestSnapshot,
@@ -54,6 +65,7 @@ import { hasVisibleMarkdownContent } from "@/lib/markdown-display";
 import type { SelectedBookReference } from "@/lib/book-references";
 import { buildVisiblePath, type SiblingInfo } from "@/lib/message-branches";
 import { turnAnchorKey } from "@/lib/chat-outline";
+import { readingPassageHref } from "@/lib/reading-citations";
 import { shouldSubmitOnEnter } from "@/lib/composer-keyboard";
 import { useImeComposing } from "@/lib/use-ime-composing";
 import type { SpaceMemoryFile } from "@/lib/space-items";
@@ -62,6 +74,7 @@ import {
   extractAskUserPayload,
   extractMessageSegments,
   leadingTraceEvents,
+  type MessageSegment,
 } from "@/components/chat/home/AskUserOptions";
 import { MasteryQuestionCard } from "@/components/chat/home/MasteryQuestionCard";
 import {
@@ -88,9 +101,12 @@ import ContextReferenceTree, {
 import {
   AssistantActivity,
   NestedTraceFlow,
+  TraceFlow,
 } from "@/features/chat/trace/TracePresentation";
+import { hasSettledFinalRound } from "@/features/chat/trace/selectors";
 import type { MessageTraceMetadata } from "@/features/chat/trace/memory";
 import { agentGlyph } from "@/components/agents/agent-icons";
+import { useConsultationReference } from "@/hooks/useConsultationReference";
 import { useConnectedAgentKinds } from "@/hooks/useConnectedAgentKinds";
 import {
   authoritativeResearchReport,
@@ -114,6 +130,7 @@ const VisualizationViewer = dynamic(
   () => import("@/components/visualize/VisualizationViewer"),
   { ssr: false },
 );
+
 
 interface ChatMessageItem {
   id?: number;
@@ -155,6 +172,272 @@ const MODE_BADGE_LABELS: Record<string, string> = {
 // A capability with no entry is title-cased rather than printed raw: an
 // unlisted mode used to surface its internal id ("immersive_reading") in the
 // conversation, which reads as a bug to everyone who sees it.
+/**
+ * What a run of working-out actually contains, for the memo below.
+ *
+ * Prose is identified by its length rather than its text because a streamed
+ * segment only ever grows; a run of steps by how many events it holds.
+ *
+ * ``settled`` says a turn has moved on to writing its answer, and then only
+ * the shape matters. The region a turn is working in stays open in the event
+ * stream and keeps absorbing everything that arrives, so a finished run of
+ * steps went on counting the answer's own deltas — 3300 events for a trace
+ * drawing two rows — and reported itself as changed on every one of them.
+ * Nothing below the answer can alter the working-out above it: a new round
+ * would take the answer back into the process, which moves the shape.
+ */
+/**
+ * The width of an ActivityRow's mark column: the 15px dot cell, the 10px gap
+ * after it, and the 2px the stack insets itself by. Pulling a row left by
+ * this lands its text on the same edge as the prose around it.
+ */
+const ROW_GUTTER = 27;
+
+function processContentKey(
+  segments: MessageSegment[],
+  settled: boolean,
+): string {
+  return segments
+    .map((seg) =>
+      seg.kind === "ask_user"
+        ? `q${seg.key}:${JSON.stringify(seg.data)}`
+        : settled
+          ? seg.key
+          : seg.kind === "text"
+            ? `t${seg.key}:${seg.text.length}`
+            : seg.kind === "trace"
+              ? `r${seg.key}:${seg.events.length}`
+              : seg.key,
+    )
+    .join("|");
+}
+
+/**
+ * Prose and the steps it introduced, in the order they were written.
+ *
+ * Spacing is owned here rather than left to each piece. Markdown carries a
+ * bottom margin and the trace rows carried only a top one, so a row sat 24px
+ * below the sentence that introduced it and flush against the one that
+ * followed — reading as a heading for the next paragraph instead of as the
+ * step between them. Both margins are stripped and one gap governs the whole
+ * column, so the rhythm is even whichever way you read it.
+ *
+ * Alignment is owned here too, for the same reason. A trace row carries its
+ * own mark column, so its text started {@link ROW_GUTTER}px right of the
+ * prose above it and the column had four left edges inside 42px — the rule,
+ * the prose, the dots, the row text. Read down it, every other line stepped
+ * sideways. The rows are pulled back by exactly that gutter instead, which
+ * leaves two edges: one content edge that prose and steps share, and the
+ * dots hanging in the margin beside it, which is what a bullet gutter is.
+ *
+ * Memoized on what it holds rather than on the props it is handed.
+ * ``messageSegments`` is rebuilt from scratch on every streamed delta, so the
+ * working-out — which stops changing the moment a turn starts writing its
+ * answer — arrived as a brand-new element tree on every frame of that answer.
+ * React cannot skip a subtree whose elements it has never seen, so the whole
+ * trace re-rendered for the answer's full length: profiled over one 35s turn,
+ * 2905 renders costing 10.3s, none of which changed a pixel.
+ *
+ * ``events`` is deliberately left out of the comparison. It is read only to
+ * verify reading-material locators, and anything that could verify one is a
+ * tool call — which lands in a run of steps and moves the key on its own.
+ */
+const ProcessBody = memo(
+  function ProcessBody({
+    segments,
+    events,
+    language,
+    isStreaming,
+    readingMaterialId,
+    readingMaterialRevision,
+  }: {
+    segments: MessageSegment[];
+    events: StreamEvent[];
+    /** The turn has moved on to its answer, so this run is finished. */
+    settled: boolean;
+    language?: string;
+    isStreaming?: boolean;
+    readingMaterialId?: string;
+    readingMaterialRevision?: number;
+  }) {
+    return (
+      <div
+        className="flex flex-col gap-3"
+        // The padding is the content edge — where prose starts and where a
+        // row's text is pulled back to. Wide enough to hold the dots.
+        style={{ paddingLeft: ROW_GUTTER }}
+      >
+        {segments.map((seg) =>
+          seg.kind === "text" ? (
+            <div key={seg.key} className="[&_.md-renderer>*:last-child]:mb-0">
+              <AssistantResponse
+                content={seg.text}
+                language={language}
+                isStreaming={isStreaming}
+                readingMaterialId={readingMaterialId}
+                readingMaterialRevision={readingMaterialRevision}
+                events={events}
+              />
+            </div>
+          ) : seg.kind === "trace" ? (
+            <div
+              key={seg.key}
+              className="[&>div]:mb-0"
+              style={{ marginLeft: -ROW_GUTTER }}
+            >
+              <TraceFlow events={seg.events} isStreaming={isStreaming} />
+            </div>
+          ) : seg.kind === "ask_user" && seg.data.resolved ? (
+            <AskUserOptions
+              key={seg.key}
+              data={seg.data}
+              onSubmit={() => false}
+            />
+          ) : null,
+        )}
+      </div>
+    );
+  },
+  (a, b) =>
+    a.language === b.language &&
+    a.isStreaming === b.isStreaming &&
+    a.settled === b.settled &&
+    a.readingMaterialId === b.readingMaterialId &&
+    a.readingMaterialRevision === b.readingMaterialRevision &&
+    processContentKey(a.segments, a.settled) ===
+      processContentKey(b.segments, b.settled),
+);
+
+/**
+ * A run of working-out that folds itself away.
+ *
+ * Used for the runs that follow a card — the leading run rides in the
+ * message's activity header instead, which is already a disclosure and
+ * already pinned at the top, so the common turn shows one line of chrome
+ * rather than two.
+ */
+function ProcessFold({
+  segments,
+  settled,
+  children,
+}: {
+  segments: MessageSegment[];
+  /** The turn has moved on: fold by default, and say what is inside. */
+  settled: boolean;
+  children: ReactNode;
+}) {
+  const { t } = useTranslation();
+  const [userOpen, setUserOpen] = useState<boolean | null>(null);
+  const open = userOpen ?? !settled;
+  const toolCalls = countProcessToolCalls(segments);
+
+  return (
+    <div className="mb-3">
+      {/* Same shape as the activity header this fold echoes: the label first,
+          the caret after it. The header has an orb holding the left column,
+          so a leading caret here would make the two controls read as two
+          different kinds of thing. */}
+      <button
+        type="button"
+        onClick={() => setUserOpen(!open)}
+        aria-expanded={open}
+        className="group/act flex items-center gap-2 text-left text-[12px] font-medium text-[var(--muted-foreground)]/55 transition-colors hover:text-[var(--foreground)]"
+      >
+        {toolCalls > 0
+          ? t("{{count}} tool calls", { count: toolCalls })
+          : t("Working notes")}
+        <FoldCaret open={open} />
+      </button>
+      <ActivityFold open={open}>
+        <div className="pt-1">{children}</div>
+      </ActivityFold>
+    </div>
+  );
+}
+
+/**
+ * One row of the assistant message: a run of working-out, a card, or answer
+ * prose. Cards and the answer stand on their own; a process run is what the
+ * turn did before either of them and folds away once the turn has settled.
+ */
+type MessageBlock =
+  | { kind: "process"; key: string; segments: MessageSegment[] }
+  | { kind: "card"; key: string; segment: MessageSegment }
+  | { kind: "answer"; key: string; segment: MessageSegment };
+
+/**
+ * Split a message into its blocks.
+ *
+ * A mastery question ends its turn, so the prose introducing it is teaching,
+ * not commentary awaiting a later answer. Keep that text outside the fold as
+ * well as the card. Earlier exploration and any intervening tool rows still
+ * fold normally. Answered clarifications belong to the same process as the
+ * work before and after them; only pending cards stand outside the fold.
+ */
+function buildMessageBlocks(
+  segments: MessageSegment[],
+  answerStart: number,
+): MessageBlock[] {
+  const teaching = new Set<number>();
+  segments.forEach((segment, index) => {
+    if (segment.kind !== "mastery_question") return;
+    let before = index - 1;
+    // Recording a grade or updating state can share the round with the quiz.
+    // Those rows do not turn the preceding teaching into working notes.
+    while (before >= 0 && segments[before].kind === "trace") before -= 1;
+    while (before >= 0 && segments[before].kind === "text") {
+      teaching.add(before);
+      before -= 1;
+    }
+  });
+  const blocks: MessageBlock[] = [];
+  let run: MessageSegment[] = [];
+  const flush = () => {
+    if (!run.length) return;
+    blocks.push({ kind: "process", key: `p-${run[0].key}`, segments: run });
+    run = [];
+  };
+  segments.slice(0, answerStart).forEach((segment, index) => {
+    if (
+      (segment.kind === "ask_user" && !segment.data.resolved) ||
+      segment.kind === "mastery_question"
+    ) {
+      flush();
+      blocks.push({ kind: "card", key: segment.key, segment });
+      return;
+    }
+    if (teaching.has(index)) {
+      flush();
+      blocks.push({ kind: "answer", key: segment.key, segment });
+      return;
+    }
+    run.push(segment);
+  });
+  flush();
+  segments.slice(answerStart).forEach((segment) => {
+    blocks.push({ kind: "answer", key: segment.key, segment });
+  });
+  return blocks;
+}
+
+/**
+ * How many steps a run of working-out took, for the line that names it.
+ *
+ * Steps only. Counting the paragraphs of commentary alongside them read as a
+ * measure of how much was said rather than how much was done, which is the
+ * thing a reader is deciding whether to open.
+ */
+function countProcessToolCalls(segments: MessageSegment[]): number {
+  let toolCalls = 0;
+  for (const segment of segments) {
+    if (segment.kind !== "trace") continue;
+    for (const event of segment.events) {
+      if (event.type === "tool_call") toolCalls += 1;
+    }
+  }
+  return toolCalls;
+}
+
 export function getModeBadgeLabel(capability?: string | null): string {
   if (!capability) return MODE_BADGE_LABELS.chat;
   const known = MODE_BADGE_LABELS[capability];
@@ -393,7 +676,9 @@ export const AssistantMessage = memo(function AssistantMessage({
   sessionId?: string | null;
   language?: string;
   researchRequestSnapshot?: MessageRequestSnapshot | null;
-  onTraceToggle?: (open: boolean) => void;
+  /** Notified when a persisted trace is opened or collapsed. Takes the id so
+   *  the list can hand one callback to every row — see ``handleTraceToggle``. */
+  onTraceToggle?: (messageId: number, open: boolean) => void;
   onConfirmOutline?: (
     outline: Array<{ title: string; overview: string }>,
     topic: string,
@@ -433,6 +718,7 @@ export const AssistantMessage = memo(function AssistantMessage({
     questionId: string,
   ) => void | boolean | Promise<void | boolean>;
 }) {
+  const { t } = useTranslation();
   const events = useMemo(() => msg.events ?? [], [msg.events]);
   const readingMaterialId = researchRequestSnapshot?.readingMaterialId;
   const readingMaterialRevision =
@@ -593,41 +879,132 @@ export const AssistantMessage = memo(function AssistantMessage({
     return raw.replace(/\[\[voice\]\][\s\S]*?\[\[\/voice\]\]/g, "").trim();
   }, [courseHandoffs.length, isStreaming, msg.content]);
 
-  // Interleaved segments for the default chat surface — text emitted
-  // before the card renders above it; text emitted by the round that
-  // follows renders below. Only walked when this message will actually
-  // render through the default branch (the research / quiz / animator /
-  // visualize branches have their own layout and pin the card elsewhere).
-  const useInlineCardSegments =
+  // Interleaved segments for the default chat surface: the message is laid
+  // out in the order it was written — what DeepTutor said it was about to do,
+  // the work it then did, what it found, and so on down to the closing answer.
+  // Only walked when this message will actually render through the default
+  // branch (the research / quiz / animator / visualize branches have their own
+  // layout and pin their cards elsewhere).
+  const useInlineSegments =
     !outlinePreview &&
     !mathAnimatorResult &&
     !visualizeResult &&
     !(quizQuestions && quizQuestions.length > 0);
   const messageSegments = useMemo(
     () =>
-      useInlineCardSegments
+      useInlineSegments
         ? extractMessageSegments(msg.events, msg.content, {
             streaming: isStreaming,
           })
         : [],
-    [useInlineCardSegments, msg.events, msg.content, isStreaming],
+    [useInlineSegments, msg.events, msg.content, isStreaming],
   );
   // Either card kind: a clarifying ask_user, or a posed mastery question.
-  // Both interleave with the prose, and a message that has one lays itself
-  // out from the segments rather than from a single body string.
   const hasInlineCards =
-    useInlineCardSegments &&
+    useInlineSegments &&
     messageSegments.some(
       (seg) => seg.kind === "ask_user" || seg.kind === "mastery_question",
     );
-  // The activity block is pinned to the top of the message, so it can only
-  // show the rounds that ran BEFORE the first card. What the resumed rounds
-  // reason about renders below the card they answer, in stream order.
+  // Lay the body out from the segments whenever there is more to place than
+  // one run of prose. A message with nothing but text gets the plain body
+  // branch below, which is the same thing with less machinery.
+  const useSegmentLayout =
+    useInlineSegments && messageSegments.some((seg) => seg.kind !== "text");
+  // Every trace row now renders inline, where the work happened. The header
+  // block keeps its status line and nothing else — leaving rows up there too
+  // would show each step twice.
   const headerTraceEvents = useMemo(
     () =>
-      hasInlineCards ? leadingTraceEvents(events, messageSegments) : undefined,
-    [hasInlineCards, messageSegments, events],
+      useSegmentLayout ? leadingTraceEvents(events, messageSegments) : undefined,
+    [useSegmentLayout, messageSegments, events],
   );
+
+  // Where the working-out stops and the answer starts.
+  //
+  // Everything a turn writes is worth watching while it works, and almost
+  // none of it is worth re-reading afterwards. So the two are separate
+  // layers: the process stays open and streams live, then folds itself into
+  // one line the moment the turn settles into its closing answer.
+  //
+  // The boundary is the trailing run of prose — the text after the last step —
+  // and it is structural, not timed: whatever is being written right now is
+  // always placed as the answer, from its first character.
+  // Teaching before a mastery question is also answer prose; the block
+  // builder preserves it separately because that card ends the turn.
+  //
+  // Waiting for the terminal round before promoting it is what an earlier cut
+  // did, and it meant the closing answer streamed INSIDE the collapsible
+  // process and jumped out of it once finished. That leaks a question the
+  // reader should never have been asked to hold — "is this the answer yet?" —
+  // and it is a question we cannot answer at that point anyway: a round only
+  // reveals whether it called tools after its prose is complete.
+  //
+  // Placing it optimistically inverts which case pays. Commentary is demoted
+  // into the process when its round turns out to have called a tool, and that
+  // costs one 14px slide at the exact moment the tool row appears below it —
+  // motion that reads as the two being grouped. The answer, which is the text
+  // the reader actually came for, never moves at all.
+  const answerStart = useMemo(() => {
+    let idx = messageSegments.length;
+    while (idx > 0 && messageSegments[idx - 1].kind === "text") idx -= 1;
+    return idx;
+  }, [messageSegments]);
+  // A turn that has started writing its answer is no longer changing the
+  // working-out above it, which is what lets that whole subtree stop
+  // re-deriving itself on every delta. Structural, like the boundary: if a new
+  // round starts, the answer goes back into the process and this goes false.
+  const processSettled = answerStart < messageSegments.length;
+  // Separately again: whether the working-out folds itself away. This is the
+  // one thing that does need the terminal-round signal, since it is the claim
+  // that there is no more work coming at all.
+  const settledIntoAnswer = !isStreaming || hasSettledFinalRound(events);
+  // Pending questions stay outside the disclosure so they remain answerable.
+  // Once answered, a clarification joins the surrounding process so resumed
+  // work continues under the original activity header.
+  const messageBlocks = useMemo(
+    () => buildMessageBlocks(messageSegments, answerStart),
+    [messageSegments, answerStart],
+  );
+  // The leading run rides in the activity header, which is already pinned at
+  // the top and already is a disclosure — giving it the process keeps the
+  // message to ONE line of chrome instead of a status line plus a fold.
+  // Only the segment layout hands its process to the header; a message with
+  // nothing but prose renders through the plain body branch below, which would
+  // otherwise draw the same opening sentence a second time.
+  const headerProcess =
+    useSegmentLayout && messageBlocks[0]?.kind === "process"
+      ? messageBlocks[0]
+      : null;
+  const bodyBlocks = headerProcess ? messageBlocks.slice(1) : messageBlocks;
+
+  const renderSegments = useCallback(
+    (segments: MessageSegment[]) => (
+      <ProcessBody
+        segments={segments}
+        events={events}
+        settled={processSettled}
+        language={language}
+        isStreaming={isStreaming}
+        readingMaterialId={readingMaterialId}
+        readingMaterialRevision={readingMaterialRevision}
+      />
+    ),
+    [
+      language,
+      isStreaming,
+      readingMaterialId,
+      readingMaterialRevision,
+      events,
+      processSettled,
+    ],
+  );
+  const headerProcessSummary = useMemo(() => {
+    if (!headerProcess) return undefined;
+    const toolCalls = countProcessToolCalls(headerProcess.segments);
+    return toolCalls > 0
+      ? t("{{count}} tool calls", { count: toolCalls })
+      : undefined;
+  }, [headerProcess, t]);
 
   const researchInProgress =
     outlineStatus === "researching" ||
@@ -662,9 +1039,16 @@ export const AssistantMessage = memo(function AssistantMessage({
         className="mb-3"
         onTraceToggle={
           msg.id != null && msg.trace?.turn_id
-            ? (open) => onTraceToggle?.(open)
+            ? (open) => onTraceToggle?.(msg.id as number, open)
             : undefined
         }
+        // The turn's working-out, folded behind this same header. One line of
+        // chrome does both jobs: it says what is happening while the turn runs
+        // and, once it settles, what it did on the way to the answer.
+        processContent={
+          headerProcess ? renderSegments(headerProcess.segments) : undefined
+        }
+        processSummary={headerProcessSummary}
       />
       {outlinePreview && outlinePreview.sub_topics.length > 0 ? (
         <>
@@ -740,39 +1124,43 @@ export const AssistantMessage = memo(function AssistantMessage({
             language={language}
           />
         </>
-      ) : hasInlineCards ? (
-        // Default chat surface with one or more cards: render text and
-        // cards in the exact order they were streamed, so the narration
-        // that introduced a card sits above it and whatever the next round
-        // said sits below.
-        messageSegments.map((seg) =>
-          seg.kind === "text" ? (
+      ) : useSegmentLayout ? (
+        // Default chat surface. The working-out (prose interleaved with the
+        // steps it introduced) is one layer, folded once the turn settles; the
+        // closing answer is the other and always stands plain. Pending cards
+        // stay outside the process until the user answers them.
+        bodyBlocks.map((block) =>
+          block.kind === "process" ? (
+            <ProcessFold
+              key={block.key}
+              segments={block.segments}
+              settled={settledIntoAnswer}
+            >
+              {renderSegments(block.segments)}
+            </ProcessFold>
+          ) : block.kind === "card" ? (
+            block.segment.kind === "mastery_question" ? (
+              <div key={block.key}>
+                {renderMasteryCard(block.segment.question)}
+              </div>
+            ) : block.segment.kind === "ask_user" ? (
+              <AskUserOptions
+                key={block.key}
+                data={block.segment.data}
+                onSubmit={submitReply}
+              />
+            ) : null
+          ) : block.segment.kind === "text" ? (
             <AssistantResponse
-              key={seg.key}
-              content={seg.text}
+              key={block.key}
+              content={block.segment.text}
               language={language}
               isStreaming={isStreaming}
               readingMaterialId={readingMaterialId}
               readingMaterialRevision={readingMaterialRevision}
               events={events}
             />
-          ) : seg.kind === "trace" ? (
-            // What DeepTutor worked out after the user answered — shown
-            // where they are looking, not back up in the header block.
-            <NestedTraceFlow
-              key={seg.key}
-              events={seg.events}
-              isStreaming={isStreaming}
-            />
-          ) : seg.kind === "mastery_question" ? (
-            <div key={seg.key}>{renderMasteryCard(seg.question)}</div>
-          ) : (
-            <AskUserOptions
-              key={seg.key}
-              data={seg.data}
-              onSubmit={submitReply}
-            />
-          ),
+          ) : null,
         )
       ) : (
         <AssistantResponse
@@ -843,1232 +1231,6 @@ function MessageTime({ value }: { value: number }) {
     </span>
   );
 }
-
-// Claude-style icon-only message action: a quiet 15px glyph with the label
-// in an instant tooltip, brightening on hover.
-// [local patch 2026-09-02] 全局音频互斥：同一时刻只允许一个语音在播
-// （覆盖挂 DOM 的横幅 <audio> 和不挂 DOM 的 new Audio() 喇叭朗读）。
-function VoiceBanner({
-  src,
-  transcript,
-  label,
-  onCopy,
-}: {
-  src: string | null;
-  transcript?: string;
-  label: string;
-  onCopy?: (content: string) => void | Promise<void>;
-}) {
-  const { t } = useTranslation();
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-  const [playing, setPlaying] = useState(false);
-  const [seconds, setSeconds] = useState<number | null>(null);
-  const [copied, setCopied] = useState(false);
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => {
-    return () => {
-      if (timerRef.current) clearTimeout(timerRef.current);
-    };
-  }, []);
-
-  const toggle = () => {
-    const audio = audioRef.current;
-    if (!audio) return;
-    if (playing) {
-      audio.pause();
-    } else {
-      pauseOtherAudio(audio);
-      // [2026-09-03 修] 语音文件（手机录音 mp4，moov 在尾部）首次点击时数据往往
-      // 还没缓冲够，play() 静默失败——用户必须点第二次。捕获后延迟重试一次。
-      audio.play().catch(() => {
-        setTimeout(() => {
-          audio.play().catch(() => setPlaying(false));
-        }, 400);
-      });
-    }
-  };
-
-  const copyTranscript = () => {
-    // [local patch 2026-09-03] 没有外部回调时直接用剪贴板 API，
-    // 保证复制按钮在任何调用点都能用。
-    if (!transcript) return;
-    const done = () => {
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 1500);
-    };
-    if (onCopy) {
-      void Promise.resolve(onCopy(transcript)).then(done);
-      return;
-    }
-    void navigator.clipboard?.writeText(transcript).then(done).catch(() => {});
-  };
-
-  return (
-    <div
-      // [local patch 2026-09-02] 对齐 dsh TtsVoiceCard：44px 高 pill、28px 圆形
-      // 播放钮、inline-flex 自适应宽度（transcript 有则显示、无则纯 pill）。
-      className="inline-flex min-h-11 max-w-[min(520px,90%)] items-center gap-2 rounded-2xl border border-[var(--border)] bg-[var(--secondary)] px-3 py-2 shadow-sm"
-    >
-      <button
-        type="button"
-        onClick={toggle}
-        aria-label={playing ? t("Pause") : t("Play")}
-        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[var(--primary)] text-[var(--primary-foreground)] transition hover:opacity-90"
-      >
-        {playing ? (
-          <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden>
-            <rect x="3.5" y="3.5" width="3" height="9" rx="1" fill="currentColor" />
-            <rect x="9.5" y="3.5" width="3" height="9" rx="1" fill="currentColor" />
-          </svg>
-        ) : (
-          <svg viewBox="0 0 16 16" width="13" height="13" aria-hidden>
-            <path d="M5 3.5L12.5 8L5 12.5V3.5Z" fill="currentColor" />
-          </svg>
-        )}
-      </button>
-      <span className="shrink-0 text-[11px] font-medium text-[var(--muted-foreground)]">
-        {seconds === null ? "" : `${seconds}s`}
-      </span>
-      {/* [local patch 2026-09-03] 对齐 dsh 横幅：口语稿**单行**显示，超出
-          部分省略；悬停看全文（title），点复制按钮拿全文。 */}
-      <span
-        className="min-w-0 flex-1 truncate text-[12.5px] text-[var(--foreground)]"
-        title={transcript || label}
-      >
-        {transcript || label}
-      </span>
-      {transcript && (
-        <button
-          type="button"
-          onClick={copyTranscript}
-          aria-label={t("Copy")}
-          className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[var(--muted-foreground)] transition hover:bg-[var(--muted)]/50 hover:text-[var(--foreground)]"
-        >
-          {copied ? <Check size={13} /> : <Copy size={13} />}
-        </button>
-      )}
-      <audio
-        ref={audioRef}
-        src={src ?? undefined}
-        // [2026-09-03 修] metadata → auto：语音文件小（几十~几百 KB），挂载即预取，
-        // 否则首次点击时才开始拉数据 + mp4 moov 在尾部 → 第一次播放必失败。
-        preload="auto"
-        className="hidden"
-        onPlay={() => setPlaying(true)}
-        onPause={() => setPlaying(false)}
-        onEnded={() => setPlaying(false)}
-        onLoadedMetadata={(e) => {
-          const d = e.currentTarget.duration;
-          setSeconds(Number.isFinite(d) ? Math.max(1, Math.ceil(d)) : null);
-        }}
-      />
-    </div>
-  );
-}
-
-export function pauseOtherAudio(current: HTMLAudioElement) {
-  const w = window as typeof window & { __dtActiveAudio?: HTMLAudioElement };
-  if (w.__dtActiveAudio && w.__dtActiveAudio !== current) {
-    try {
-      w.__dtActiveAudio.pause();
-    } catch {
-      // ignore
-    }
-  }
-  w.__dtActiveAudio = current;
-}
-
-export function RoughActionButton({
-  icon: Icon,
-  label,
-  onClick,
-  disabled,
-}: {
-  icon: LucideIcon;
-  label: string;
-  onClick: () => void;
-  disabled?: boolean;
-}) {
-  return (
-    <Tooltip label={label} side="top">
-      <button
-        type="button"
-        onClick={onClick}
-        disabled={disabled}
-        aria-label={label}
-        className="inline-flex items-center justify-center rounded-md p-1 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)]/50 hover:text-[var(--foreground)] disabled:cursor-not-allowed disabled:opacity-35"
-      >
-        <Icon size={15} strokeWidth={1.5} />
-      </button>
-    </Tooltip>
-  );
-}
-
-/**
- * ``Promise<void>`` and not ``void | Promise<void>``: this button reports
- * success to the user, so it needs a handler that can tell it about failure.
- * A synchronously-void handler has no way to, which is how a swallowed
- * clipboard error came to be rendered as 已复制.
- */
-type CopyHandler = (content: string) => Promise<void>;
-
-export function CopyActionButton({
-  content,
-  onCopy,
-}: {
-  content: string;
-  onCopy: CopyHandler;
-}) {
-  const { t } = useTranslation();
-  const [outcome, setOutcome] = useState<"idle" | "copied" | "failed">("idle");
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  useEffect(() => {
-    return () => {
-      if (timerRef.current) clearTimeout(timerRef.current);
-    };
-  }, []);
-
-  const handleClick = useCallback(() => {
-    const settle = (next: "copied" | "failed") => {
-      setOutcome(next);
-      if (timerRef.current) clearTimeout(timerRef.current);
-      timerRef.current = setTimeout(() => setOutcome("idle"), 1600);
-    };
-    // `Promise.resolve().then(() => onCopy(...))` rather than
-    // `Promise.resolve(onCopy(...))`: the latter runs the handler outside the
-    // chain, so a *synchronous* throw — which is exactly what reading
-    // `navigator.clipboard.writeText` on an insecure origin does — escapes it.
-    void Promise.resolve()
-      .then(() => onCopy(content))
-      .then(
-        () => settle("copied"),
-        () => settle("failed"),
-      );
-  }, [content, onCopy]);
-
-  const label =
-    outcome === "copied"
-      ? t("Copied")
-      : outcome === "failed"
-        ? t("Could not copy")
-        : t("Copy");
-
-  return (
-    <Tooltip label={label} side="top">
-      <button
-        type="button"
-        onClick={handleClick}
-        aria-live="polite"
-        aria-label={label}
-        className={`inline-flex items-center justify-center rounded-md p-1 transition-colors ${
-          outcome === "copied"
-            ? "text-[var(--primary)]"
-            : outcome === "failed"
-              ? "text-[var(--destructive)]"
-              : "text-[var(--muted-foreground)] hover:bg-[var(--muted)]/50 hover:text-[var(--foreground)]"
-        }`}
-      >
-        {outcome === "copied" ? (
-          <Check size={15} strokeWidth={2} />
-        ) : outcome === "failed" ? (
-          <X size={15} strokeWidth={2} />
-        ) : (
-          <Copy size={15} strokeWidth={1.5} />
-        )}
-      </button>
-    </Tooltip>
-  );
-}
-
-// Speaker button: synthesizes the reply via the configured TTS provider and
-// plays it. On the first manual play of a session it offers to auto-play the
-// rest; `autoPlayFresh` triggers playback automatically for a reply that just
-// finished generating when auto-play is on.
-export function PlayAudioButton({
-  content,
-  conversationKey,
-  autoPlayFresh,
-}: {
-  content: string;
-  conversationKey?: string;
-  autoPlayFresh: boolean;
-}) {
-  const { t } = useTranslation();
-  const {
-    autoplayEnabled,
-    enableForSession,
-    markPrompted,
-    shouldPromptOnFirstPlay,
-  } = useVoiceAutoplay(conversationKey);
-  const [state, setState] = useState<"idle" | "loading" | "playing">("idle");
-  const [showPrompt, setShowPrompt] = useState(false);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-  const urlRef = useRef<string | null>(null);
-  const autoPlayedRef = useRef(false);
-
-  const cleanup = useCallback(() => {
-    if (audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current = null;
-    }
-    if (urlRef.current) {
-      URL.revokeObjectURL(urlRef.current);
-      urlRef.current = null;
-    }
-  }, []);
-
-  const play = useCallback(async () => {
-    setState("loading");
-    try {
-      const resp = await apiFetch(apiUrl("/api/voice/tts"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ text: content }),
-      });
-      if (!resp.ok) {
-        cleanup();
-        setState("idle");
-        return;
-      }
-      const blob = await resp.blob();
-      cleanup();
-      const url = URL.createObjectURL(blob);
-      urlRef.current = url;
-      const audio = new Audio(url);
-      audioRef.current = audio;
-      pauseOtherAudio(audio);
-      audio.onended = () => {
-        setState("idle");
-        cleanup();
-      };
-      audio.onerror = () => {
-        setState("idle");
-        cleanup();
-      };
-      await audio.play();
-      setState("playing");
-    } catch {
-      cleanup();
-      setState("idle");
-    }
-  }, [cleanup, content]);
-
-  const handleClick = useCallback(() => {
-    if (state === "playing" || state === "loading") {
-      cleanup();
-      setState("idle");
-      return;
-    }
-    const willPrompt = shouldPromptOnFirstPlay();
-    void play();
-    if (willPrompt) {
-      markPrompted();
-      setShowPrompt(true);
-    }
-  }, [cleanup, markPrompted, play, shouldPromptOnFirstPlay, state]);
-
-  // Auto-play a freshly-generated reply when enabled, exactly once. Deferred
-  // to a timer so synthesis (which sets state) starts off the effect body.
-  useEffect(() => {
-    if (!autoPlayFresh || !autoplayEnabled) return;
-    if (autoPlayedRef.current) return;
-    if (!content.trim()) return;
-    autoPlayedRef.current = true;
-    const id = window.setTimeout(() => void play(), 0);
-    return () => window.clearTimeout(id);
-  }, [autoPlayFresh, autoplayEnabled, content, play]);
-
-  useEffect(() => cleanup, [cleanup]);
-
-  return (
-    <div className="relative inline-flex">
-      <Tooltip
-        label={state === "playing" ? t("Stop") : t("Play aloud")}
-        side="top"
-      >
-        <button
-          type="button"
-          onClick={handleClick}
-          aria-label={state === "playing" ? t("Stop") : t("Play aloud")}
-          className={`inline-flex items-center justify-center rounded-md p-1 transition-colors ${
-            state === "playing"
-              ? "text-[var(--primary)]"
-              : "text-[var(--muted-foreground)] hover:bg-[var(--muted)]/50 hover:text-[var(--foreground)]"
-          }`}
-        >
-          {state === "loading" ? (
-            <Loader2 size={15} strokeWidth={1.8} className="animate-spin" />
-          ) : state === "playing" ? (
-            <Square size={13} strokeWidth={1.8} className="fill-current" />
-          ) : (
-            <Volume2 size={15} strokeWidth={1.5} />
-          )}
-        </button>
-      </Tooltip>
-      {showPrompt && (
-        <div className="absolute bottom-full left-0 z-30 mb-2 w-60 rounded-lg border border-[var(--border)] bg-[var(--card)] p-3 shadow-lg">
-          <p className="text-[12px] leading-relaxed text-[var(--foreground)]">
-            {t("Auto-play replies in this conversation?")}
-          </p>
-          <div className="mt-2.5 flex justify-end gap-2">
-            <button
-              type="button"
-              onClick={() => setShowPrompt(false)}
-              className="rounded-md px-2.5 py-1 text-[11.5px] text-[var(--muted-foreground)] hover:bg-[var(--muted)]/50 hover:text-[var(--foreground)]"
-            >
-              {t("Not now")}
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                enableForSession();
-                setShowPrompt(false);
-              }}
-              className="rounded-md bg-[var(--primary)] px-2.5 py-1 text-[11.5px] font-medium text-[var(--primary-foreground)] hover:bg-[var(--primary)]/90"
-            >
-              {t("Turn on")}
-            </button>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function BranchNavigator({
-  info,
-  onSwitch,
-}: {
-  info: SiblingInfo;
-  onSwitch: (childId: number) => void;
-}) {
-  const { t } = useTranslation();
-  const prevIdx = info.index - 2; // 0-based prev index
-  const nextIdx = info.index; // 0-based next index
-  const prevId = prevIdx >= 0 ? info.siblingIds[prevIdx] : null;
-  const nextId =
-    nextIdx < info.siblingIds.length ? info.siblingIds[nextIdx] : null;
-  return (
-    <div className="inline-flex items-center gap-0.5 text-[10.5px] text-[var(--muted-foreground)]">
-      <button
-        type="button"
-        onClick={() => prevId !== null && onSwitch(prevId)}
-        disabled={prevId === null}
-        aria-label={t("Previous branch")}
-        className="rounded p-0.5 transition-colors hover:text-[var(--foreground)] disabled:cursor-not-allowed disabled:opacity-30"
-      >
-        <ChevronLeft size={12} strokeWidth={1.8} />
-      </button>
-      <span className="select-none tabular-nums">
-        {info.index} / {info.total}
-      </span>
-      <button
-        type="button"
-        onClick={() => nextId !== null && onSwitch(nextId)}
-        disabled={nextId === null}
-        aria-label={t("Next branch")}
-        className="rounded p-0.5 transition-colors hover:text-[var(--foreground)] disabled:cursor-not-allowed disabled:opacity-30"
-      >
-        <ChevronRight size={12} strokeWidth={1.8} />
-      </button>
-    </div>
-  );
-}
-
-function DeleteTurnButton({ onDelete }: { onDelete: () => void }) {
-  const { t } = useTranslation();
-  const [confirm, setConfirm] = useState(false);
-  if (!confirm) {
-    return (
-      <RoughActionButton
-        icon={Trash2}
-        label={t("Delete")}
-        onClick={() => setConfirm(true)}
-      />
-    );
-  }
-  return (
-    <div className="inline-flex items-center gap-1.5 text-[11px]">
-      <span className="text-[var(--muted-foreground)]">
-        {t("Delete this turn?")}
-      </span>
-      <button
-        type="button"
-        onClick={() => {
-          onDelete();
-          setConfirm(false);
-        }}
-        className="rounded-md px-1.5 py-0.5 font-medium text-[var(--destructive)] hover:bg-[var(--destructive)]/10"
-      >
-        {t("Delete")}
-      </button>
-      <button
-        type="button"
-        onClick={() => setConfirm(false)}
-        className="rounded-md px-1.5 py-0.5 font-medium text-[var(--muted-foreground)] hover:bg-[var(--muted)]/40"
-      >
-        {t("Cancel")}
-      </button>
-    </div>
-  );
-}
-
-export const UserMessage = memo(function UserMessage({
-  msg,
-  index,
-  onPreviewAttachment,
-  onCopy,
-  onEdit,
-  editDisabled,
-  siblingInfo,
-  onSwitchBranch,
-  availableKbNames,
-  showModeBadge,
-}: {
-  msg: ChatMessageItem;
-  index: number;
-  onPreviewAttachment?: (attachment: MessageAttachment) => void;
-  onCopy?: CopyHandler;
-  onEdit?: (messageId: number, newContent: string) => void;
-  editDisabled?: boolean;
-  siblingInfo?: SiblingInfo;
-  onSwitchBranch?: (parentMessageId: number | null, childId: number) => void;
-  /** Names of KBs confirmed to exist. Omitted when the KB list is unavailable. */
-  availableKbNames?: Set<string>;
-  /** Label the bubble with its capability. A single-capability surface
-   *  already names the mode in its own chrome. */
-  showModeBadge?: boolean;
-}) {
-  const { t } = useTranslation();
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(msg.content);
-  const { isComposingRef, onCompositionStart, onCompositionEnd } =
-    useImeComposing();
-  // Connected subagents ride in knowledge_bases (same selection path) but are
-  // agents, not KBs — this maps a selected name to its backend kind so the
-  // reference chip can badge it with the agent's brand icon.
-  const agentKinds = useConnectedAgentKinds();
-  if (msg.content.startsWith("[Quiz Performance]")) return null;
-  // ``msg.id`` can be a negative client-side sentinel for optimistic
-  // (just-sent, not yet reconciled with the server) rows. We still allow
-  // the Edit button to surface — ``editMessage`` in the context handles
-  // the optimistic case by triggering a session reload to resolve the
-  // real id before submitting the branch.
-  const canEdit =
-    Boolean(onEdit) && typeof msg.id === "number" && !editDisabled;
-  const startEdit = () => {
-    if (!canEdit) return;
-    setDraft(msg.content);
-    setEditing(true);
-  };
-  const cancelEdit = () => {
-    setEditing(false);
-    setDraft(msg.content);
-  };
-  const submitEdit = () => {
-    const trimmed = draft.trim();
-    if (!trimmed || trimmed === msg.content) {
-      cancelEdit();
-      return;
-    }
-    if (typeof msg.id !== "number") return;
-    onEdit?.(msg.id, trimmed);
-    setEditing(false);
-  };
-
-  // Everything this turn carried — file attachments plus the request
-  // [local patch 2026-09-02] 语音横幅：用户消息里 audio 附件（麦克风录音）
-  // 渲染为可回放横幅，互斥播放；转写文本在下方正文正常显示。
-  const voiceAttachments = (msg.attachments ?? []).filter((a) => {
-    const mime = (a.mime_type || "").toLowerCase();
-    const fn = (a.filename || "").toLowerCase();
-    return mime.startsWith("audio/") || a.type === "audio" || /\.(webm|ogg|mp4|m4a)$/.test(fn);
-  });
-  // [local patch 2026-09-02] 语音消息：剥壳转写（dsh voiceAsText wrapper 只给 AI）
-  // [local patch 2026-09-03] 剥壳后为空（ASR 空转写）就传空串——VoiceBanner
-  // 自然回落显示 label（"语音消息"）。之前 `|| msg.content` 兜底会把
-  // 「[语音消息]」标记原文顶到横幅上，正是老大骂的"语音前面带括号前缀"。
-  const isVoiceMessage = voiceAttachments.length > 0;
-  const voiceTranscript = isVoiceMessage
-    ? msg.content
-        .replace(/^\[用户发送了一条语音[\s\S]*?识别内容：/, "")
-        .replace(/^\[语音消息\]\s*/, "")
-        .replace(/。?请调用 tts_speak[\s\S]*$/, "")
-        .trim()
-    : msg.content;
-
-  // snapshot's Space references — rendered as one collapsed tree under
-  // the bubble (the sent-message mirror of the composer's tree).
-  const snap = msg.requestSnapshot;
-  const refTreeItems: ContextTreeItem[] = [
-    ...(msg.attachments ?? []).map((a, ai): ContextTreeItem => {
-      const filename = a.filename || t("Attachment");
-      const spec = docIconFor(filename);
-      const src = a.type === "image" ? imageSrcForAttachment(a) : null;
-      return {
-        key: `att-${ai}`,
-        icon: spec.Icon,
-        kind: spec.label,
-        label: filename,
-        thumbnailUrl: src ?? undefined,
-        onClick: onPreviewAttachment ? () => onPreviewAttachment(a) : undefined,
-      };
-    }),
-    ...(snap?.knowledgeBases ?? [])
-      .filter(
-        (name) =>
-          !availableKbNames || availableKbNames.has(name) || agentKinds[name],
-      )
-      .map((name): ContextTreeItem => {
-        const agentKind = agentKinds[name];
-        if (agentKind) {
-          return {
-            key: `agent-${name}`,
-            // Brand SVG marks share the lucide call signature (size/strokeWidth/
-            // className); cast bridges the structural-variance gap.
-            icon: (agentGlyph(agentKind) ?? Bot) as unknown as LucideIcon,
-            kind: t("Agent"),
-            label: name,
-          };
-        }
-        return {
-          key: `kb-${name}`,
-          icon: Database,
-          kind: t("Knowledge"),
-          label: name,
-        };
-      }),
-    ...(snap?.bookReferences ?? []).map((ref): ContextTreeItem => ({
-      key: `book-${ref.book_id}`,
-      icon: BookOpen,
-      kind: t("Book"),
-      label: `${ref.page_ids.length} ${t("chapters")}`,
-    })),
-    ...(snap?.readingReferences ?? []).map((ref): ContextTreeItem => ({
-      key: `reading-${ref.material_id}-r${ref.revision}`,
-      icon: BookMarked,
-      kind: t("Reading"),
-      label: `${ref.locators.length} ${t("reading sections")}`,
-    })),
-    ...(snap?.notebookReferences ?? []).map((ref): ContextTreeItem => ({
-      key: `nb-${ref.notebook_id}`,
-      icon: BookOpen,
-      kind: t("Notebook"),
-      label: `${ref.record_ids.length} ${t("records")}`,
-    })),
-    // Imported agent conversations are folded into the same history_references
-    // payload but carry the `imported_` id prefix — split them back out so they
-    // read as "My Agents" rather than "Chat History" (mirrors the composer).
-    ...(snap?.historyReferences ?? [])
-      .filter((sid) => !sid.startsWith("imported_"))
-      .map((sid): ContextTreeItem => ({
-        key: `hist-${sid}`,
-        icon: MessageSquare,
-        kind: t("Chat History"),
-        label: "",
-      })),
-    ...(snap?.historyReferences ?? [])
-      .filter((sid) => sid.startsWith("imported_"))
-      .map((sid): ContextTreeItem => ({
-        key: `agent-${sid}`,
-        icon: Bot,
-        kind: t("My Agents"),
-        label: "",
-      })),
-    ...(snap?.questionNotebookReferences?.length
-      ? [
-          {
-            key: "qb",
-            icon: ClipboardList,
-            kind: t("Question Bank"),
-            label: `${snap.questionNotebookReferences.length} ${t("items")}`,
-          } satisfies ContextTreeItem,
-        ]
-      : []),
-    ...(snap?.persona
-      ? [
-          {
-            key: "persona",
-            icon: UserRound,
-            kind: t("Persona"),
-            label: snap.persona,
-          } satisfies ContextTreeItem,
-        ]
-      : []),
-    ...(snap?.memoryReferences ?? []).map((file): ContextTreeItem => ({
-      key: `mem-${file}`,
-      icon: Brain,
-      kind: t("Memory"),
-      label: file === "summary" ? t("Summary") : t("Profile"),
-    })),
-  ];
-
-  return (
-    <div key={`${msg.role}-${index}`} className="group flex justify-end">
-      {/* ``data-turn-key`` is the scroll target the turn navigator jumps
-          to; ``data-turn-bubble`` is what it flashes on arrival. Both keys
-          come from ``turnAnchorKey`` so the rail and the transcript can
-          never disagree about which bubble a tick means. */}
-      <div
-        data-turn-key={turnAnchorKey(msg, index)}
-        className="flex max-w-[75%] flex-col items-end gap-1.5"
-      >
-        {showModeBadge && (
-          <div className="flex justify-end pr-1">
-            <span className="text-[10px] tracking-wide text-[var(--muted-foreground)]">
-              {t(getModeBadgeLabel(msg.capability))}
-            </span>
-          </div>
-        )}
-        {editing ? (
-          <div className="w-[min(620px,75vw)] rounded-2xl border border-[var(--primary)]/40 bg-[var(--secondary)] px-3 py-2.5 text-[14px] leading-relaxed text-[var(--foreground)] shadow-sm">
-            <textarea
-              autoFocus
-              value={draft}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Escape") {
-                  e.preventDefault();
-                  cancelEdit();
-                } else if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-                  e.preventDefault();
-                  submitEdit();
-                } else if (shouldSubmitOnEnter(e, isComposingRef.current)) {
-                  e.preventDefault();
-                  submitEdit();
-                }
-              }}
-              onCompositionStart={onCompositionStart}
-              onCompositionEnd={onCompositionEnd}
-              rows={Math.min(8, Math.max(2, draft.split("\n").length))}
-              className="w-full resize-none border-0 bg-transparent text-[14px] leading-relaxed text-[var(--foreground)] outline-none focus:outline-none"
-            />
-            <div className="mt-1 flex items-center justify-between gap-2">
-              <span className="text-[10.5px] text-[var(--muted-foreground)]/80">
-                {t("Use the arrows below to switch between branches.")}
-              </span>
-              <div className="flex shrink-0 items-center gap-1.5">
-                <button
-                  type="button"
-                  onClick={cancelEdit}
-                  className="rounded-md px-2 py-0.5 text-[11px] font-medium text-[var(--muted-foreground)] hover:bg-[var(--muted)]/40"
-                >
-                  {t("Cancel")}
-                </button>
-                <button
-                  type="button"
-                  onClick={submitEdit}
-                  disabled={!draft.trim() || draft.trim() === msg.content}
-                  className="rounded-md bg-[var(--primary)] px-2.5 py-0.5 text-[11px] font-medium text-[var(--primary-foreground)] hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
-                >
-                  {t("Send")}
-                </button>
-              </div>
-            </div>
-          </div>
-        ) : isVoiceMessage ? (
-          // [local patch 2026-09-02] 用户语音消息 = 一条语音横幅（回放原声 + 转写）
-          <VoiceBanner
-            src={
-              voiceAttachments.length > 0
-                ? imageSrcForAttachment(voiceAttachments[0])
-                : null
-            }
-            transcript={voiceTranscript}
-            label="语音消息"
-            onCopy={onCopy}
-          />
-        ) : (
-          <div
-            data-turn-bubble="true"
-            className="rounded-2xl bg-[var(--secondary)] px-4 py-2.5 text-[14px] leading-relaxed text-[var(--foreground)] shadow-sm"
-          >
-            <div className="whitespace-pre-wrap">{msg.content}</div>
-          </div>
-        )}
-        {!editing && refTreeItems.length > 0 && (
-          <div className="pr-1">
-            <ContextReferenceTree
-              items={refTreeItems}
-              direction="down"
-              align="right"
-              summaryNoun={t("attachments")}
-            />
-          </div>
-        )}
-        {!editing && (onCopy || canEdit || siblingInfo) && msg.content && (
-          <div className="flex h-7 items-center justify-end gap-1 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
-            {siblingInfo && siblingInfo.total > 1 && (
-              <BranchNavigator
-                info={siblingInfo}
-                onSwitch={(childId) =>
-                  onSwitchBranch?.(siblingInfo.parentId, childId)
-                }
-              />
-            )}
-            {onCopy && (
-              <CopyActionButton content={msg.content} onCopy={onCopy} />
-            )}
-            {canEdit && (
-              <RoughActionButton
-                icon={Pencil}
-                label={t("Edit")}
-                onClick={startEdit}
-              />
-            )}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-});
-
-UserMessage.displayName = "UserMessage";
-
-export const ChatMessageList = memo(function ChatMessageList({
-  messages,
-  isStreaming,
-  sessionId,
-  language,
-  onCopyAssistantMessage,
-  onRegenerateMessage,
-  onConfirmOutline,
-  onPreviewAttachment,
-  onDeleteTurn,
-  selectedBranches,
-  onEditMessage,
-  onSwitchBranch,
-  availableKbNames,
-  onSubmitUserReply,
-  onAnswerMasteryQuestion,
-  onSkipMasteryQuestion,
-  showModeBadge = true,
-  onLoadMessageTrace,
-  onReleaseMessageTrace,
-}: {
-  messages: ChatMessageItem[];
-  isStreaming: boolean;
-  sessionId?: string | null;
-  language?: string;
-  onCopyAssistantMessage: CopyHandler;
-  onRegenerateMessage: () => void;
-  onConfirmOutline?: (
-    outline: Array<{ title: string; overview: string }>,
-    topic: string,
-    researchConfig?: Record<string, unknown> | null,
-    requestSnapshot?: MessageRequestSnapshot | null,
-  ) => void;
-  onPreviewAttachment?: (attachment: MessageAttachment) => void;
-  onDeleteTurn?: (messageId: number) => void;
-  /** Edit-branching: selected sibling at each branch point. */
-  selectedBranches?: Record<string, number>;
-  onEditMessage?: (messageId: number, newContent: string) => void;
-  onSwitchBranch?: (parentMessageId: number | null, childId: number) => void;
-  /**
-   * Deliver an ``ask_user`` reply back to the backend so the agentic
-   * loop resumes on the same turn. Forwarded into each
-   * ``AssistantMessage`` so the card UI rendered alongside the paused
-   * assistant bubble can submit selections / free-form text. Accepts
-   * either a string (legacy) or a structured object with per-question
-   * ``answers`` (v2).
-   */
-  onSubmitUserReply?: (
-    reply:
-      | string
-      | {
-          text?: string;
-          answers?: Array<{ questionId: string; text: string }>;
-        },
-  ) => void | boolean | Promise<void | boolean>;
-  /**
-   * Answer a mastery question card by starting the next turn (see
-   * ``AssistantMessage``). Separate from ``onSubmitUserReply`` because these
-   * cards outlive their turn by design.
-   */
-  onAnswerMasteryQuestion?: (answer: {
-    questionId: string;
-    text: string;
-  }) => void | boolean | Promise<void | boolean>;
-  /** Drop a question instead of answering it; also starts a turn. */
-  onSkipMasteryQuestion?: (
-    questionId: string,
-  ) => void | boolean | Promise<void | boolean>;
-  /** Names of KBs confirmed to exist. Omitted when the KB list is unavailable. */
-  availableKbNames?: Set<string>;
-  /** Label each user bubble with its capability. Off on surfaces that run a
-   *  single capability and already name it in their own chrome. */
-  showModeBadge?: boolean;
-  onLoadMessageTrace?: (messageId: number) => Promise<void>;
-  onReleaseMessageTrace?: (messageId: number) => void;
-}) {
-  const { t } = useTranslation();
-  // Visible path: when no branching has happened the result is identical
-  // to the input. After an edit, sibling branches are filtered out so the
-  // UI shows exactly one continuous thread, with arrow nav exposed on the
-  // user message where branching diverges.
-  const { messages: visibleMessages, siblingsByMessageId } = useMemo(
-    () => buildVisiblePath(messages, selectedBranches),
-    [messages, selectedBranches],
-  );
-
-  // Deep-research two-turn merge.
-  //
-  // The capability runs in two BE turns: turn-1 emits rephrase +
-  // decompose + an outline-preview result; turn-2 (after the user
-  // confirms the outline) emits the research blocks + the final
-  // report. The user wants both turns to live in ONE assistant
-  // bubble so the rephrase trace, the Q&A summary, the (collapsed)
-  // outline editor, and the research / reporting traces are all
-  // visually contiguous instead of split across two bubbles.
-  //
-  // For each parent (outline-preview) msg with a followup
-  // deep_research msg, we synthesise a merged msg with:
-  //
-  // * events  — parent.events ++ followup.events (preserving order
-  //   so TraceFlow's call_id grouping keeps working).
-  // * content — followup.content (the report). The parent's
-  //   rephrase preface is already represented inside the trace card,
-  //   so concatenating again would duplicate it above the report.
-  //
-  // The followup is dropped from the visible row list so only the
-  // merged bubble renders.
-  const deepResearchMergeMap = useMemo(() => {
-    const map = new Map<
-      number,
-      { mergedEvents: StreamEvent[]; mergedContent: string }
-    >();
-    const followupIndices = new Set<number>();
-    for (let i = 0; i < visibleMessages.length; i++) {
-      const msg = visibleMessages[i];
-      if (msg.role !== "assistant" || msg.capability !== "deep_research")
-        continue;
-      const resultEv = msg.events?.find((e) => e.type === "result");
-      const meta = resultEv?.metadata as Record<string, unknown> | undefined;
-      if (!meta?.outline_preview) continue;
-      const nextResearchAssistantIdx = visibleMessages
-        .slice(i + 1)
-        .findIndex(
-          (m) => m.role === "assistant" && m.capability === "deep_research",
-        );
-      if (nextResearchAssistantIdx === -1) continue;
-      const absoluteFollowupIdx = i + 1 + nextResearchAssistantIdx;
-      const followup = visibleMessages[absoluteFollowupIdx];
-      if (!isConfirmedResearchFollowup(followup.events)) continue;
-      const mergedEvents = [...(msg.events ?? []), ...(followup.events ?? [])];
-      const mergedContent = authoritativeResearchReport(
-        followup.events,
-        followup.content || msg.content,
-      );
-      map.set(i, { mergedEvents, mergedContent });
-      followupIndices.add(absoluteFollowupIdx);
-    }
-    return { mergedByParent: map, followupIndices };
-  }, [visibleMessages]);
-
-  // One pass for the whole conversation: a question posed in one turn can be
-  // graded in a later one, and the card that asked it shows the verdict.
-  const masteryGrades = useMemo(
-    () => collectMasteryGrades(visibleMessages),
-    [visibleMessages],
-  );
-  const masterySkips = useMemo(
-    () => collectMasterySkips(visibleMessages),
-    [visibleMessages],
-  );
-
-  const outlineStatusByIndex = useMemo(() => {
-    const map = new Map<
-      number,
-      "editing" | "researching" | "done" | "failed"
-    >();
-    for (let i = 0; i < visibleMessages.length; i++) {
-      const msg = visibleMessages[i];
-      if (msg.role !== "assistant" || msg.capability !== "deep_research")
-        continue;
-      const resultEv = msg.events?.find((e) => e.type === "result");
-      const meta = resultEv?.metadata as Record<string, unknown> | undefined;
-      if (!meta?.outline_preview) continue;
-      const followup = visibleMessages
-        .slice(i + 1)
-        .find(
-          (m) => m.role === "assistant" && m.capability === "deep_research",
-        );
-      if (followup && isConfirmedResearchFollowup(followup.events)) {
-        map.set(i, researchFollowupStatus(followup.events));
-      } else {
-        // The first deep_research turn only plans/rephrases/decomposes and
-        // returns an outline preview. While that turn is still flushing
-        // post-result events, the outline must already be editable; only the
-        // hidden follow-up turn created by "Start Research" means research is
-        // actually underway.
-        map.set(i, "editing");
-      }
-    }
-    return map;
-  }, [visibleMessages]);
-
-  const messageRows = useMemo(() => {
-    // System messages are backend grounding (e.g. quiz follow-up context) and
-    // must never be rendered as a chat bubble. Filter them out defensively in
-    // addition to the hydration-time filter in UnifiedChatContext.
-    return visibleMessages
-      .map((msg, index) => ({ msg, originalIndex: index }))
-      .filter(({ msg, originalIndex }) => {
-        if (msg.role === "system") return false;
-        // Drop deep_research followup msgs — their events were merged
-        // into the parent (outline-preview) bubble.
-        if (deepResearchMergeMap.followupIndices.has(originalIndex))
-          return false;
-        return true;
-      })
-      .map(({ msg, originalIndex }) => {
-        // Splice in the merged event stream when this row owns a
-        // deep_research two-turn pair.
-        const merged = deepResearchMergeMap.mergedByParent.get(originalIndex);
-        const effectiveMsg: ChatMessageItem = merged
-          ? {
-              ...msg,
-              events: merged.mergedEvents,
-              content: merged.mergedContent,
-            }
-          : msg;
-        if (effectiveMsg.role === "user") {
-          return {
-            msg: effectiveMsg,
-            originalIndex,
-            pairedUserMessage: null as ChatMessageItem | null,
-          };
-        }
-        const pairedUserMessage =
-          [...visibleMessages.slice(0, originalIndex)]
-            .reverse()
-            .find((previous) => previous.role === "user") ?? null;
-        return { msg: effectiveMsg, originalIndex, pairedUserMessage };
-      });
-  }, [visibleMessages, deepResearchMergeMap]);
-
-  const lastRenderedAssistantIndex = useMemo(() => {
-    for (let idx = messageRows.length - 1; idx >= 0; idx -= 1) {
-      if (messageRows[idx].msg.role === "assistant")
-        return messageRows[idx].originalIndex;
-    }
-    return -1;
-  }, [messageRows]);
-
-  // Auto-play (when enabled) must fire only for a reply that JUST finished
-  // generating — never when loading history. We capture the last-assistant
-  // index at the moment streaming flips off; the matching speaker button
-  // plays once. Switching sessions clears the marker. Uses the "adjust state
-  // during render" pattern (state-vs-prop comparison, like the API-key reset
-  // in ServiceConfigEditor) — both branches are conditional and bounded.
-  const [prevStreaming, setPrevStreaming] = useState(isStreaming);
-  const [prevSession, setPrevSession] = useState(sessionId);
-  const [freshlyCompletedIndex, setFreshlyCompletedIndex] = useState<
-    number | null
-  >(null);
-  if (prevSession !== sessionId) {
-    setPrevSession(sessionId);
-    setPrevStreaming(false);
-    setFreshlyCompletedIndex(null);
-  } else if (prevStreaming !== isStreaming) {
-    setPrevStreaming(isStreaming);
-    if (!isStreaming && lastRenderedAssistantIndex >= 0) {
-      setFreshlyCompletedIndex(lastRenderedAssistantIndex);
-    }
-  }
-
-  return (
-    <>
-      {messageRows.map(({ msg, originalIndex, pairedUserMessage }) => {
-        const i = originalIndex;
-        if (msg.role === "user") {
-          const sib =
-            msg.id !== undefined ? siblingsByMessageId.get(msg.id) : undefined;
-          return (
-            <div
-              key={`${msg.role}-${i}`}
-              className="w-full"
-              data-chat-message-id={msg.id}
-              data-chat-message-role={msg.role}
-            >
-              <UserMessage
-                msg={msg}
-                index={i}
-                onPreviewAttachment={onPreviewAttachment}
-                onCopy={onCopyAssistantMessage}
-                onEdit={onEditMessage}
-                editDisabled={isStreaming}
-                siblingInfo={sib}
-                onSwitchBranch={onSwitchBranch}
-                availableKbNames={availableKbNames}
-                showModeBadge={showModeBadge}
-              />
-            </div>
-          );
-        }
-
-        const isActiveAssistant =
-          isStreaming && i === lastRenderedAssistantIndex;
-        const msgDone = !isActiveAssistant;
-        const showActions = msgDone && hasVisibleMarkdownContent(msg.content);
-        const terminalError = (msg.events ?? []).find(
-          (e) =>
-            e.type === "error" &&
-            Boolean(
-              (e.metadata as { turn_terminal?: boolean } | undefined)
-                ?.turn_terminal,
-            ),
-        );
-        const terminalErrorRetryable = Boolean(
-          (terminalError?.metadata as { retryable?: boolean } | undefined)
-            ?.retryable,
-        );
-        const isLastAssistant = i === lastRenderedAssistantIndex;
-        const showRegenerate =
-          !isStreaming &&
-          isLastAssistant &&
-          Boolean(pairedUserMessage) &&
-          (!pairedUserMessage?.capability ||
-            pairedUserMessage?.capability === "chat") &&
-          (showActions || terminalErrorRetryable);
-        const deletableTurnUserId =
-          msgDone && pairedUserMessage?.id != null && onDeleteTurn
-            ? pairedUserMessage.id
-            : null;
-        const showDelete = deletableTurnUserId != null;
-
-        const costSummary = (() => {
-          if (!msgDone) return null;
-          const resultEv = msg.events?.find((e) => e.type === "result");
-          if (!resultEv) return null;
-          const meta = resultEv.metadata?.metadata as
-            Record<string, unknown> | undefined;
-          const cs = meta?.cost_summary as
-            | {
-                total_cost_usd?: number;
-                total_tokens?: number;
-                total_calls?: number;
-              }
-            | undefined;
-          if (!cs || !cs.total_calls) return null;
-          return cs;
-        })();
-
-        return (
-          <div
-            key={`${msg.role}-${i}`}
-            className="w-full"
-            data-chat-message-id={msg.id}
-            data-chat-message-role={msg.role}
-          >
-            <InlineFileCardProvider
-              attachments={msg.attachments ?? []}
-              events={msg.events}
-              onOpen={onPreviewAttachment}
-            >
-              <AssistantMessage
-                msg={msg}
-                isStreaming={isActiveAssistant}
-                outlineStatus={outlineStatusByIndex.get(i)}
-                sessionId={sessionId}
-                language={language}
-                onConfirmOutline={onConfirmOutline}
-                onSubmitUserReply={onSubmitUserReply}
-                onAnswerMasteryQuestion={onAnswerMasteryQuestion}
-                onSkipMasteryQuestion={onSkipMasteryQuestion}
-                researchRequestSnapshot={
-                  pairedUserMessage?.requestSnapshot ?? null
-                }
-                onTraceToggle={(open) => {
-                  if (msg.id == null) return;
-                  if (open) {
-                    void onLoadMessageTrace?.(msg.id);
-                  } else {
-                    onReleaseMessageTrace?.(msg.id);
-                  }
-                }}
-                masteryGrades={masteryGrades}
-                masterySkips={masterySkips}
-              />
-            </InlineFileCardProvider>
-            <GeneratedFileCards
-              attachments={msg.attachments ?? []}
-              events={msg.events}
-              onOpen={onPreviewAttachment}
-            />
-            {(() => {
-              // A turn that died (LLM/provider failure, interruption) ends
-              // with a turn_terminal error event. Surface it as an error
-              // card with an inline retry instead of leaving a bare trace.
-              if (isActiveAssistant) return null;
-              if (!terminalError) return null;
-              return (
-                <div className="mt-3 flex w-full max-w-[min(520px,90%)] items-center gap-2 rounded-xl border border-[var(--destructive)]/30 bg-[var(--destructive)]/5 px-3 py-2">
-                  <AlertCircle className="h-4 w-4 shrink-0 text-[var(--destructive)]" />
-                  <span className="min-w-0 flex-1 text-[12px] leading-[1.5] text-[var(--foreground)]">
-                    {terminalError.content || t("The turn was interrupted.")}
-                  </span>
-                  {showRegenerate ? (
-                    <button
-                      type="button"
-                      onClick={() => onRegenerateMessage()}
-                      className="shrink-0 rounded-md px-2 py-1 text-[11.5px] font-medium text-[var(--destructive)] hover:bg-[var(--destructive)]/10"
-                    >
-                      {t("Retry")}
-                    </button>
-                  ) : null}
-                </div>
-              );
-            })()}
-            {(showActions || costSummary || showDelete) && (
-              <div className="mt-3 flex items-center">
-                {(showActions || showDelete) && (
-                  <div className="flex items-center gap-1">
-                    {showActions && (
-                      <CopyActionButton
-                        content={msg.content}
-                        onCopy={onCopyAssistantMessage}
-                      />
-                    )}
-                    {showActions && (
-                      <PlayAudioButton
-                        content={msg.content}
-                        conversationKey={sessionId ?? undefined}
-                        autoPlayFresh={
-                          isLastAssistant && freshlyCompletedIndex === i
-                        }
-                      />
-                    )}
-                    {showActions && showRegenerate && (
-                      <RoughActionButton
-                        icon={RefreshCcw}
-                        label={t("Regenerate")}
-                        onClick={() => onRegenerateMessage()}
-                      />
-                    )}
-                    {showDelete && (
-                      <DeleteTurnButton
-                        onDelete={() => onDeleteTurn?.(deletableTurnUserId)}
-                      />
-                    )}
-                  </div>
-                )}
-                {(() => {
-                  // [local patch 2026-09-03] 消息时间戳。拿不到真实时间就
-                  // 什么都不显示——绝不能退回"当前时间"（会变成刷新时间）。
-                  const raw =
-                    msg.createdAt ??
-                    (msg as { created_at?: number }).created_at ??
-                    null;
-                  if (raw == null) return null;
-                  return (
-                    <div className="ml-auto">
-                      <MessageTime value={raw} />
-                    </div>
-                  );
-                })()}
               </div>
             )}
           </div>

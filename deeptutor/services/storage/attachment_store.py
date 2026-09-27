@@ -165,16 +165,15 @@ class LocalDiskAttachmentStore:
         sid = quote(_coerce_filename(session_id), safe="")
         aid = quote(attachment_id, safe="")
         name = quote(_coerce_filename(filename), safe="")
+        from deeptutor.services.workspace.context import workspace_url
+
         public_url = f"{_PUBLIC_URL_PREFIX}/{sid}/{aid}/{name}"
 
-        # [local patch 2026-09-03] 语音附件转 mp3 播放副本（本质修复"要点两次才
-        # 能播放"）：手机录音 mp4 的 moov atom 在文件尾部，浏览器流式播放首次必
-        # 败（iOS Safari 还忽略预加载），第二次点击时全量已缓存才成功。mp3 流式
-        # 友好、全浏览器兼容。转码失败不阻塞上传，退回原 URL。
+        # [local patch 2026-09-03] voice attachment mp3 playable copy
+        # (fixes "need two clicks to play"): phone mp4 moov-atom-at-end fails
+        # first streamed play; mp3 is stream-friendly. Fail-open to original.
         if is_audio:
-            # [2026-09-03] 转码必须同步等完再返回 URL——后台跑的话前端立刻加载
-            # mp3 会 404（"done 之后才完成的后台任务等于没做"）。语音片段小，
-            # 转码 1~2 秒，可接受。
+            # transcode must complete before URL return or frontend 404s
             await loop.run_in_executor(None, self._make_playable_copy_sync, target)
 
             stem = target.name.rsplit(".", 1)[0]
@@ -182,9 +181,9 @@ class LocalDiskAttachmentStore:
             mp3_target = self._safe_join(session_id, mp3_name)
             if mp3_target is not None and mp3_target.is_file() and mp3_target.stat().st_size > 256:
                 mp3_url = f"{_PUBLIC_URL_PREFIX}/{sid}/{aid}/{quote(mp3_name, safe='')}"
-                return mp3_url
+                return workspace_url(mp3_url)
 
-        return public_url
+        return workspace_url(public_url)
 
     @staticmethod
     def _write_sync(target: Path, data: bytes) -> None:
@@ -291,8 +290,10 @@ def get_attachment_store() -> AttachmentStore:
 
 
 def _attachment_root() -> Path:
+    from deeptutor.services.workspace.context import current_workspace_id
+
     override = str(load_system_settings().get("chat_attachment_dir") or "").strip()
-    if override:
+    if override and not current_workspace_id():
         return Path(override).expanduser().resolve()
     return get_path_service().get_user_root().joinpath(*_DEFAULT_SUBPATH).resolve()
 

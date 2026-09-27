@@ -9,10 +9,12 @@ import re
 import time
 import unicodedata
 from typing import Any
+from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from deeptutor.learning.storage import LearningStore
 from deeptutor.multi_user.learning_access import (
     allowed_reading_extensions,
     assert_learning_material,
@@ -23,21 +25,54 @@ from deeptutor.reading.extensions import (
     ReadingExtensionResult,
     get_reading_extension_registry,
 )
+from deeptutor.services.llm.exceptions import LLMError
+
+logger = logging.getLogger(__name__)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 # LLM-backed actions (translation / quiz) routinely need more than 30s on a
-# reasoning model; browser_speech is instant. One ceiling for all of them kept
-# opening the circuit breaker on ordinary cold starts.
+# reasoning model; browser_speech is instant.
 ACTION_TIMEOUT_S = 120
-_LLM_EXTENSIONS = frozenset({"translation", "quiz", "study_guidance", "vocabulary"})
-_TIMED_OUT_COOLDOWN_S = 90.0
+
+
+def _unavailable_detail(
+    *,
+    reason: str = "",
+    message: str = "This reading action is temporarily unavailable.",
+) -> dict[str, Any]:
+    detail: dict[str, Any] = {
+        "message": message,
+        "recoverable": True,
+    }
+    if reason:
+        detail["reason"] = reason[:500]
+    return detail
 
 
 class ActionPayload(BaseModel):
     locator: int = Field(ge=1)
     selection: str = Field(default="", max_length=10_000)
     locale: str = Field(default="en", max_length=32)
+
+
+class QuizAnswerItem(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    question_id: str = Field(min_length=1)
+    selected_index: int = Field(ge=0)
+
+
+class QuizAnswersPayload(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    locator: int = Field(ge=1)
+    source_anchor: str = Field(default="", max_length=2_000)
+    section_title: str = Field(default="", max_length=500)
+    session_id: str = ""
+    turn_id: str = ""
+    submission_id: str = Field(default="", max_length=200)
+    answers: list[QuizAnswerItem] = Field(min_length=1)
 
 
 def _normal(value: str) -> str:
@@ -72,14 +107,27 @@ def _verified_selection(candidate: str, unit_text: str) -> str:
     value = _normal(candidate)
     if not value:
         return ""
-    if value in _normal(unit_text):
+    unit = _normal(unit_text)
+    if value in unit:
         return value
-    key = _match_key(value)
-    unit_key = _match_key(unit_text)
-    if key and key in unit_key:
-        return value
+    # A PDF text layer and extracted text disagree about breaks: margin line
+    # numbers the extractor put on their own lines reach the browser glued to
+    # the previous word. Match without whitespace and return the material's
+    # own spelling of the span.
+    compact: list[str] = []
+    positions: list[int] = []
+    for index, character in enumerate(unit):
+        if not character.isspace():
+            compact.append(character)
+            positions.append(index)
+    needle = re.sub(r"\s+", "", value)
+    found = "".join(compact).find(needle)
+    if found >= 0:
+        return unit[positions[found] : positions[found + len(needle) - 1] + 1]
     # Prefix of the first sentence / first 48 visible chars — enough for a
     # PDF that hyphenates across lines differently than the browser.
+    key = _match_key(value)
+    unit_key = _match_key(unit_text)
     for size in (48, 24):
         prefix = key[:size].strip()
         if len(prefix) >= 12 and prefix in unit_key:
@@ -143,27 +191,31 @@ async def run_extension_action(
             status_code=422,
             detail="This reading unit is too large for the extension protocol.",
         ) from exc
-    if not registry.begin_action(extension_id):
+    # Sync plugins run on a private worker we cannot kill; a timeout must
+    # open the circuit so later clicks do not queue behind the stuck call.
+    # Async plugins (quiz, translation, …) are cancelled with the request,
+    # so a slow LLM must not disable the button for the rest of the process.
+    run = extension.run_action
+    sync_plugin = not inspect.iscoroutinefunction(run)
+    if not registry.begin_action(extension_id, circuit_break=sync_plugin):
         raise HTTPException(
             status_code=503,
-            detail={
-                "message": "This reading action is temporarily unavailable.",
-                "recoverable": True,
-            },
+            detail=_unavailable_detail(reason="busy_or_circuit_open"),
         )
-    # LLM-backed actions get the full budget; browser_speech is instant.
-    timeout_s = (
-        ACTION_TIMEOUT_S if extension_id in _LLM_EXTENSIONS else min(30, ACTION_TIMEOUT_S)
-    )
+    # Only a still-running worker needs the circuit kept open (#1448).
+    # Async cancellation finishes before the reservation is released, including
+    # sync handlers that return an awaitable after their worker has finished.
+    worker: asyncio.Future | None = None
     try:
-        async with asyncio.timeout(timeout_s):
-            loop = asyncio.get_running_loop()
-            value = await loop.run_in_executor(
-                registry.executor_for(extension_id),
-                extension.run_action,
-                action,
-                context,
-            )
+        async with asyncio.timeout(ACTION_TIMEOUT_S):
+            handler = extension.run_action
+            if inspect.iscoroutinefunction(handler):
+                value = await handler(action, context)
+            else:
+                worker = asyncio.get_running_loop().run_in_executor(
+                    registry.executor_for(extension_id), handler, action, context
+                )
+                value = await asyncio.shield(worker)
             if inspect.isawaitable(value):
                 value = await value
         result = (
@@ -173,22 +225,29 @@ async def run_extension_action(
         )
         if result.type not in extension.manifest.result_types:
             raise ValueError(f"Extension returned undeclared result type {result.type!r}.")
-        return result.model_dump()
+        dumped = result.model_dump()
+        quiz_payload = dumped.get("payload")
+        if dumped.get("type") == "quiz" and isinstance(quiz_payload, dict):
+            await _persist_reading_quiz_pending(material_id, payload.locator, quiz_payload)
     except TimeoutError as exc:
-        registry.mark_timed_out(extension_id, cooldown_s=timeout_s)
+        logger.warning("Reading extension %s action %s timed out", extension_id, action)
+        raise HTTPException(
+            status_code=503,
+            detail=_unavailable_detail(reason="timed_out"),
+        ) from exc
+    except LLMError as exc:
         logger.warning(
-            "Reading extension %s action %s timed out after %.0fs",
+            "Reading extension %s action %s failed via language model: %s",
             extension_id,
             action,
-            timeout_s,
-            exc_info=True,
+            exc,
         )
         raise HTTPException(
             status_code=503,
-            detail={
-                "message": "This reading action is temporarily unavailable.",
-                "recoverable": True,
-            },
+            detail=_unavailable_detail(
+                reason=str(exc),
+                message="This reading action needs a working language model.",
+            ),
         ) from exc
     except ValueError as exc:
         # Model-shape / grounding failures are user-actionable — do not dress
@@ -209,24 +268,168 @@ async def run_extension_action(
             },
         ) from exc
     except Exception as exc:
-        # Previously every failure (LLM JSON shape, missing key, provider
-        # error) was swallowed into the same 503 with no log line — undiagnosable.
-        logger.warning(
-            "Reading extension %s action %s failed: %s",
-            extension_id,
-            action,
-            exc,
-            exc_info=True,
-        )
+        logger.exception("Reading extension %s action %s failed", extension_id, action)
         raise HTTPException(
             status_code=503,
-            detail={
-                "message": "This reading action is temporarily unavailable.",
-                "recoverable": True,
-            },
+            detail=_unavailable_detail(reason=str(exc)),
         ) from exc
     finally:
+        if worker is not None and not worker.done():
+            registry.mark_timed_out(extension_id)
+            worker.add_done_callback(_discard_late_worker_result)
         registry.finish_action(extension_id)
+
+    try:
+        await asyncio.to_thread(
+            _record_reading_activity,
+            material_id,
+            extension_id=extension_id,
+            action=action,
+            locator=payload.locator,
+            result_type=result.type,
+        )
+    except Exception:
+        logger.exception("Reading action succeeded, but learning activity recording failed")
+    return dumped
+
+
+def _choice_map(choices: list[Any]) -> dict[str, str]:
+    return {
+        chr(65 + index): str(choice)
+        for index, choice in enumerate(choices)
+        if isinstance(choice, str) or choice is not None
+    }
+
+
+def _material_title(material_id: str) -> str:
+    try:
+        manifest = ReadingStore().manifest(material_id)
+    except Exception:
+        return ""
+    return str(getattr(manifest, "title", "") or getattr(manifest, "filename", "") or "")
+
+
+async def _persist_reading_quiz_pending(
+    material_id: str, locator: int, payload: dict[str, Any]
+) -> None:
+    questions = payload.get("questions")
+    if not isinstance(questions, list) or not questions:
+        return
+    from deeptutor.services.session import get_sqlite_session_store
+
+    # A regenerated quiz must not reuse q_1 and grade an old card against a new key.
+    quiz_id = uuid4().hex
+    for index, question in enumerate(questions):
+        if isinstance(question, dict):
+            question["id"] = f"{quiz_id}:{index}"
+    await get_sqlite_session_store().put_reading_quiz_pending(material_id, locator, questions)
+
+
+@router.post("/materials/{material_id}/extensions/quiz/answers")
+async def submit_quiz_answers(material_id: str, payload: QuizAnswersPayload) -> dict[str, Any]:
+    try:
+        assert_learning_material(material_id)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+
+    from deeptutor.learning.assessment import (
+        AssessmentRecord,
+        RecordAssessmentError,
+        is_correct_to_result,
+        record_assessment,
+    )
+    from deeptutor.services.session import get_sqlite_session_store
+
+    store = get_sqlite_session_store()
+    question_ids = [item.question_id.strip() for item in payload.answers]
+    pending = await store.get_reading_quiz_pending(material_id, payload.locator, question_ids)
+    missing = [qid for qid in question_ids if qid not in pending]
+    if missing:
+        raise HTTPException(status_code=409, detail="This reading quiz has expired.")
+
+    # Validate the entire batch before saving any answers.
+    for item in payload.answers:
+        question = pending[item.question_id.strip()]
+        choices = question.get("choices")
+        correct_index = question.get("correct_choice_index")
+        if (
+            not isinstance(choices, list)
+            or type(correct_index) is not int
+            or not 0 <= correct_index < len(choices)
+        ):
+            raise HTTPException(
+                status_code=409, detail="This reading quiz has an invalid answer key."
+            )
+        if item.selected_index >= len(choices):
+            raise HTTPException(status_code=422, detail="Selected answer is outside the choices.")
+
+    session_id = payload.session_id.strip()
+    section_title = payload.section_title.strip() or payload.source_anchor.strip()
+    material_title = _material_title(material_id)
+    if session_id:
+        if await store.get_session(session_id) is None:
+            raise HTTPException(status_code=404, detail="Reading session not found.")
+    origin_type = "conversation" if session_id else "document_analysis"
+    origin_ref = session_id or f"reading:{material_id}"
+    turn_id = payload.turn_id.strip() or f"reading:{material_id}:loc:{payload.locator}"
+    graded: list[dict[str, Any]] = []
+    for item in payload.answers:
+        question = pending[item.question_id.strip()]
+        choices = question.get("choices") if isinstance(question.get("choices"), list) else []
+        try:
+            correct_index = int(question.get("correct_choice_index"))
+        except (TypeError, ValueError):
+            correct_index = -1
+        is_correct = item.selected_index == correct_index
+        result = is_correct_to_result(is_correct)
+        options = _choice_map(choices)
+        selected_text = (
+            str(choices[item.selected_index]) if 0 <= item.selected_index < len(choices) else ""
+        )
+        correct_text = str(choices[correct_index]) if 0 <= correct_index < len(choices) else ""
+        submission_id = payload.submission_id.strip()
+        attempt_id = (
+            f"reading:{origin_type}:{origin_ref}:{turn_id}:"
+            f"{item.question_id.strip()}:{submission_id}"
+            if submission_id
+            else ""
+        )
+        try:
+            await record_assessment(
+                AssessmentRecord(
+                    session_id=session_id,
+                    origin_type=origin_type,
+                    origin_ref=origin_ref,
+                    turn_id=turn_id,
+                    question_id=item.question_id.strip(),
+                    question=str(question.get("prompt") or "Reading quiz"),
+                    question_type="choice",
+                    options=options,
+                    user_answer=selected_text,
+                    correct_answer=correct_text,
+                    is_correct=is_correct,
+                    result=result,
+                    source="immersive_reading",
+                    assessment_type="focus_check",
+                    material_id=material_id,
+                    material_title=material_title,
+                    section_id=str(payload.locator),
+                    section_title=section_title,
+                    mastery_path_id=str(question.get("mastery_path_id") or ""),
+                    knowledge_point_id=str(question.get("knowledge_point_id") or ""),
+                    attempt_id=attempt_id,
+                )
+            )
+        except RecordAssessmentError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        graded.append(
+            {
+                "question_id": item.question_id.strip(),
+                "is_correct": is_correct,
+                "result": result,
+            }
+        )
+    return {"answers": graded}
 
 
 __all__ = ["router"]

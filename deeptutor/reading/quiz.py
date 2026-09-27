@@ -6,6 +6,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
+from deeptutor.reading._grounding import evidence_key
 from deeptutor.reading._grounding import grounded_prompt as _prompt
 from deeptutor.reading.extensions import (
     ReadingAction,
@@ -14,8 +15,8 @@ from deeptutor.reading.extensions import (
     ReadingExtensionResult,
 )
 from deeptutor.services.llm import complete
+from deeptutor.services.llm.structured_retry import json_with_reasoning_retry
 from deeptutor.services.prompt.language import is_chinese as _is_zh
-from deeptutor.utils.json_parser import parse_json_response
 
 _SYSTEM_EN = """You write a short comprehension quiz from one verified reading context.
 
@@ -63,59 +64,27 @@ def _normalise(value: str) -> str:
     return " ".join(value.casefold().split())
 
 
-def _grounding_key(value: str) -> str:
-    """Aggressive match key — PDF extract and LLM quotes disagree on invisible
-    characters and punctuation the learner cannot see."""
-    import re
-    import unicodedata
-
-    text = unicodedata.normalize("NFKC", value or "")
-    text = text.translate(
-        str.maketrans(
-            {
-                "­": "",
-                "​": "",
-                "‌": "",
-                "‍": "",
-                "﻿": "",
-                " ": " ",
-                "‘": "'",
-                "’": "'",
-                "“": '"',
-                "”": '"',
-                "—": "-",
-                "–": "-",
-                "·": " ",
-                "…": "...",
-            }
-        )
-    )
-    return re.sub(r"\s+", " ", text).strip().casefold()
-
-
 def _evidence_grounded(evidence: str, context_text: str) -> bool:
     """True when *evidence* is (a tolerant form of) text present on the page."""
     exact = _normalise(evidence)
     page = _normalise(context_text)
     if exact and exact in page:
         return True
-    key = _grounding_key(evidence)
-    page_key = _grounding_key(context_text)
+    key = evidence_key(evidence)
+    page_key = evidence_key(context_text)
     if not key or not page_key:
         return False
     if key in page_key:
         return True
     # Models paraphrase lightly or drop punctuation — accept a distinctive prefix.
     for size in (48, 24, 16):
-        prefix = key[:size].strip()
-        if len(prefix) >= 12 and prefix in page_key:
+        if len(key) >= size and key[:size] in page_key:
             return True
     return False
 
 
-def _quiz(raw: str, context: ReadingContext) -> _Quiz:
-    data: Any = parse_json_response(raw, fallback=None)
-    if not isinstance(data, dict):
+def _quiz(data: Any, context: ReadingContext) -> _Quiz:
+    if not isinstance(data, dict) or not data:
         raise ValueError("Reading quiz model returned invalid JSON.")
     try:
         quiz = _Quiz.model_validate({"questions": data.get("questions")})
@@ -141,7 +110,6 @@ def _quiz(raw: str, context: ReadingContext) -> _Quiz:
         return quiz
     raise ValueError("Reading quiz evidence must come from the reading context.")
 
-
 class ReadingQuizExtension:
     """Return bounded comprehension questions grounded in the current unit."""
 
@@ -161,17 +129,25 @@ class ReadingQuizExtension:
         if not context.visible_text.strip():
             raise ValueError("Reading quiz requires visible text.")
 
-        from deeptutor.reading._grounding import complete_json
-        from deeptutor.services.model_selection.tasks import task_llm_scope
+        from deeptutor.services.model_selection.tasks import TaskKind, task_llm_scope
 
-        with task_llm_scope():
-            raw = await complete_json(
-                prompt=_prompt(context),
+        async def _run(reasoning_effort: str | None) -> str:
+            return await complete(                prompt=_prompt(context),
                 system_prompt=_SYSTEM_ZH if _is_zh(context.locale) else _SYSTEM_EN,
                 max_tokens=2000,
                 temperature=0.3,
+                max_tokens=2_500,
+                max_retries=0,
+                response_format={"type": "json_object"},
+                reasoning_effort=reasoning_effort,
             )
-        quiz = _quiz(raw, context)
+
+        with task_llm_scope(TaskKind.READING_QUIZ):
+            data = await json_with_reasoning_retry(
+                _run,
+                expected_key="questions",
+            )
+        quiz = _quiz(data, context)
         return ReadingExtensionResult(
             type="quiz",
             title="阅读测验" if _is_zh(context.locale) else "Reading quiz",

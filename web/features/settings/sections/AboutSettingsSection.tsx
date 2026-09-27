@@ -1,5 +1,7 @@
 "use client";
 
+import { useSettings } from "@/features/settings/store/SettingsStore";
+import { useStagedSettings } from "@/features/settings/store/useStagedSettings";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ArrowUpRight,
@@ -27,7 +29,6 @@ import {
   fetchAppUpdateJob,
   fetchAppUpdateStatus,
   requestAppUpdate,
-  setAppUpdateChecks,
   updateJobIsActive,
   type AppUpdateStatus,
   type InstallMode,
@@ -58,7 +59,9 @@ export default function AboutSettingsPage() {
   const [job, setJob] = useState<UpdateJob | null>(null);
   const [loading, setLoading] = useState(true);
   const [checking, setChecking] = useState(false);
-  const [savingChecks, setSavingChecks] = useState(false);
+  const { applying: savingChecks, draftRevision } = useSettings();
+  const [liveChecks, setLiveChecks] = useState({ enabled: false });
+  const [checks, setChecks] = useStagedSettings("update-checks", liveChecks, setLiveChecks);
   const [requesting, setRequesting] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [error, setError] = useState("");
@@ -67,6 +70,7 @@ export default function AboutSettingsPage() {
     try {
       const next = await fetchAppUpdateStatus();
       setStatus(next);
+      setLiveChecks({ enabled: next.check_enabled });
       setJob(next.job);
       setError(next.check_error || "");
     } catch (cause) {
@@ -82,7 +86,7 @@ export default function AboutSettingsPage() {
 
   useEffect(() => {
     void load();
-  }, [load]);
+  }, [load, draftRevision]);
 
   const activeJob = Boolean(job && updateJobIsActive(job.status));
   useEffect(() => {
@@ -127,6 +131,7 @@ export default function AboutSettingsPage() {
     try {
       const next = await checkAppUpdate();
       setStatus(next);
+      setLiveChecks({ enabled: next.check_enabled });
       setJob(next.job);
     } catch (cause) {
       setError(
@@ -139,26 +144,7 @@ export default function AboutSettingsPage() {
     }
   }, [t]);
 
-  const changeChecks = useCallback(
-    async (enabled: boolean) => {
-      setSavingChecks(true);
-      setError("");
-      try {
-        const next = await setAppUpdateChecks(enabled);
-        setStatus(next);
-        setJob(next.job);
-      } catch (cause) {
-        setError(
-          cause instanceof Error
-            ? cause.message
-            : (t("Unable to save update settings.") as string),
-        );
-      } finally {
-        setSavingChecks(false);
-      }
-    },
-    [t],
-  );
+  const changeChecks = (enabled: boolean) => setChecks({ enabled });
 
   const update = useCallback(async () => {
     setRequesting(true);
@@ -357,7 +343,7 @@ export default function AboutSettingsPage() {
           control={
             status?.is_admin ? (
               <Toggle
-                checked={status?.check_enabled ?? true}
+                checked={checks.enabled}
                 disabled={loading || savingChecks || activeJob}
                 onChange={(enabled) => void changeChecks(enabled)}
               />
