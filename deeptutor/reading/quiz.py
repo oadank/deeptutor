@@ -132,11 +132,11 @@ class ReadingQuizExtension:
         from deeptutor.services.model_selection.tasks import TaskKind, task_llm_scope
 
         async def _run(reasoning_effort: str | None) -> str:
-            return await complete(                prompt=_prompt(context),
+            return await complete(
+                prompt=_prompt(context),
                 system_prompt=_SYSTEM_ZH if _is_zh(context.locale) else _SYSTEM_EN,
-                max_tokens=2000,
-                temperature=0.3,
                 max_tokens=2_500,
+                temperature=0.3,
                 max_retries=0,
                 response_format={"type": "json_object"},
                 reasoning_effort=reasoning_effort,

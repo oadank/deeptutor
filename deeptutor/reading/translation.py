@@ -108,7 +108,8 @@ class TranslationExtension:
         from deeptutor.services.model_selection.tasks import TaskKind, task_llm_scope
 
         with task_llm_scope(TaskKind.READING_TRANSLATION):
-            raw = await complete(                prompt=_prompt(context),
+            raw = await complete(
+                prompt=_prompt(context),
                 system_prompt=_SYSTEM_ZH if target_language == "zh" else _SYSTEM_EN,
                 max_tokens=4000,
                 temperature=0.1,
