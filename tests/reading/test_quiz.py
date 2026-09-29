@@ -177,7 +177,29 @@ async def test_missing_visible_text_fails_before_an_llm_call(monkeypatch):
                 * 3
             }
         ),
-        _model_response(evidence="outside facts are forbidden"),
+        # Two questions, both with evidence from outside the passage. The
+        # fork soft-grounds a full three-question set (PDF unicode makes
+        # every quote fail the matcher sometimes — see quiz.py "Last
+        # resort"), but with fewer than three questions and no grounded
+        # evidence the model is clearly not writing from this page.
+        json.dumps(
+            {
+                "questions": [
+                    {
+                        "prompt": "Which phrase does the passage verify?",
+                        "choices": [
+                            "A checked phrase",
+                            "A guessed phrase",
+                            "An omitted phrase",
+                            "An unrelated phrase",
+                        ],
+                        "correct_choice_index": 1,
+                        "evidence": "outside facts are forbidden",
+                    }
+                ]
+                * 2
+            }
+        ),
     ],
 )
 @pytest.mark.asyncio

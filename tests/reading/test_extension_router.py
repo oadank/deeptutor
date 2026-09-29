@@ -293,7 +293,12 @@ def test_async_reading_action_can_be_retried_after_timeout(material, monkeypatch
         return ReadingExtensionResult(type="card")
 
     handler = (lambda *args: run(*args)) if sync_wrapper else run
-    monkeypatch.setattr(reading_extensions, "ACTION_TIMEOUT_S", 0.01)
+    # 50ms (not 10ms): the sync-wrapper branch submits run() to the executor
+    # and only awaits the coroutine afterwards, so the first request must
+    # outlive thread submission + cross-thread callback delivery. 10ms is
+    # tighter than Windows scheduling and the request times out before the
+    # handler body ever runs (observed calls == 0).
+    monkeypatch.setattr(reading_extensions, "ACTION_TIMEOUT_S", 0.05)
     client = _client(monkeypatch, _extension(handler))
     url = f"/api/reading/materials/{material.material_id}/extensions/sample/actions/open"
     assert client.post(url, json={"locator": 1}).status_code == 503

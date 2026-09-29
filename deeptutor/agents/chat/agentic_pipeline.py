@@ -41,7 +41,6 @@ CHAT_EXCLUDED_TOOLS = LOOP_EXCLUDED_TOOLS
 class AgenticChatPipeline(AgenticLoopPipeline):
     """Run a chat turn as one exploring agent loop."""
 
-
     async def _drain_user_injections(self, context: "UnifiedContext") -> list[str]:
         """[local patch 2026-09-03, migrated to v1.6.5 architecture] Return user
         messages injected into this still-running turn.

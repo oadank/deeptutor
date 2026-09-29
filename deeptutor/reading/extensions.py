@@ -142,9 +142,12 @@ class ReadingExtensionRegistry:
             until = self._timed_out_until.get(extension_id)
             if until is not None:
                 if time.monotonic() < until:
-                    return False
-                self._timed_out_until.pop(extension_id, None)
-            if extension_id in self._active:                return False
+                    if circuit_break:
+                        return False
+                else:
+                    self._timed_out_until.pop(extension_id, None)
+            if extension_id in self._active:
+                return False
             self._active.add(extension_id)
             return True
 

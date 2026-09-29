@@ -163,6 +163,13 @@ SEARCH_PROVIDERS: tuple[SearchProviderSpec, ...] = (
         hint="returns full page content",
     ),
     SearchProviderSpec(
+        name="anysearch",
+        label="AnySearch",
+        requires_api_key=True,
+        env_keys=("ANYSEARCH_API_KEY", "SEARCH_API_KEY"),
+        hint="aggregated search API · Bearer auth",
+    ),
+    SearchProviderSpec(
         name="serper",
         label="Serper",
         requires_api_key=True,

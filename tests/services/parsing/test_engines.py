@@ -20,6 +20,7 @@ def test_known_engines() -> None:
         "mineru",
         "docling",
         "markitdown",
+        "anydoc",
         "pymupdf4llm",
         "liteparse",
         "tika",
@@ -33,6 +34,7 @@ def test_list_engines_reports_metadata_and_availability() -> None:
         "mineru",
         "docling",
         "markitdown",
+        "anydoc",
         "pymupdf4llm",
         "liteparse",
         "tika",
@@ -900,7 +902,7 @@ def test_install_manager_spec_allowlist() -> None:
     )
 
     # Only optional pip-backed engines are installable; built-in / external are not.
-    assert installable_engines() == {"pymupdf4llm", "markitdown", "docling", "liteparse"}
+    assert installable_engines() == {"pymupdf4llm", "markitdown", "docling", "liteparse", "anydoc"}
     assert ENGINE_PIP_SPECS["markitdown"] == ["markitdown[all]>=0.1.7"]
     assert ENGINE_PIP_SPECS["pymupdf4llm"] == ["pymupdf4llm>=1.28.2"]
     assert ENGINE_PIP_SPECS["liteparse"] == ["liteparse>=2.14.2"]

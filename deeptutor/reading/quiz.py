@@ -110,6 +110,7 @@ def _quiz(data: Any, context: ReadingContext) -> _Quiz:
         return quiz
     raise ValueError("Reading quiz evidence must come from the reading context.")
 
+
 class ReadingQuizExtension:
     """Return bounded comprehension questions grounded in the current unit."""
 

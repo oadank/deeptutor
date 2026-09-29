@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import asyncio
-import re
-import uuid
 from collections.abc import Callable
 import contextlib
 from contextvars import Token
 import logging
+import re
 from typing import TYPE_CHECKING, Any
 
 from deeptutor.core.stream import StreamEvent, StreamEventType
@@ -1075,18 +1074,14 @@ class TurnExecutor:
             # 合成（绝不朗读正文——老大明确否决）。
             voice_text = ""
             voice_reply_attachments: list[dict[str, Any]] = []
-            voice_match = re.search(
-                r"\[\[voice\]\]([\s\S]*?)\[\[/voice\]\]", assistant_content
-            )
+            voice_match = re.search(r"\[\[voice\]\]([\s\S]*?)\[\[/voice\]\]", assistant_content)
             if voice_match:
                 voice_text = voice_match.group(1).strip()
-                assistant_content = (
-                    assistant_content.replace(voice_match.group(0), "").strip()
-                )
+                assistant_content = assistant_content.replace(voice_match.group(0), "").strip()
             turn_content = str(payload.get("content") or "")
-            is_voice_turn = turn_content.startswith("[用户发送了一条语音") or turn_content.startswith(
-                "[语音消息]"
-            )
+            is_voice_turn = turn_content.startswith(
+                "[用户发送了一条语音"
+            ) or turn_content.startswith("[语音消息]")
             # [local patch 2026-09-03] dsh-web 同款双通道触发（移植自
             # @oadank/dsh-input-tools 的 voiceRequestProvider）：用户用**文字**
             # 要求语音回复时同样兜底——模型不自觉也照出语音。dsh 实测"不漏"靠的
@@ -1104,11 +1099,15 @@ class TurnExecutor:
             # 模型已经自己调工具出了音频（speech.mp3 之类）就别再补一份，
             # 否则同一条回复会挂两个语音横幅。
             already_has_audio = any(
-                str(a.get("mime_type") or "").startswith("audio/")
-                for a in generated_attachments
+                str(a.get("mime_type") or "").startswith("audio/") for a in generated_attachments
             )
             voice_turn = is_voice_turn or voice_requested
-            if voice_turn and not voice_text and not already_has_audio and assistant_content.strip():
+            if (
+                voice_turn
+                and not voice_text
+                and not already_has_audio
+                and assistant_content.strip()
+            ):
                 # 网关抽风时改写调用会失败 → 超时 25s + 重试一次；仍失败就不出语音
                 # （绝不朗读正文）。
                 for _attempt in range(2):
@@ -1134,8 +1133,12 @@ class TurnExecutor:
                             return "".join(buf)
 
                         spoken = (
-                            await asyncio.wait_for(_rewrite(), timeout=25)
-                        ).strip().strip('"').strip("'").strip()
+                            (await asyncio.wait_for(_rewrite(), timeout=25))
+                            .strip()
+                            .strip('"')
+                            .strip("'")
+                            .strip()
+                        )
                         if spoken and not spoken.startswith("{"):
                             voice_text = spoken
                             break
@@ -1145,6 +1148,7 @@ class TurnExecutor:
             if voice_turn and voice_text:
                 try:
                     from deeptutor.services.voice import synthesize_speech
+
                     # [local patch 2026-09-03] 必须走 tool 同一套落盘路径：
                     # media_gen/media/tts_<hex>/ —— collect_public_artifacts 只认
                     # 这个根；之前写到 media_gen/tts/ 下扫出来永远是空（生成了
@@ -1154,13 +1158,10 @@ class TurnExecutor:
                         _write_media,
                     )
 
-                    audio_bytes, audio_content_type = await synthesize_speech(
-                        voice_text
-                    )
+                    audio_bytes, audio_content_type = await synthesize_speech(voice_text)
                     ext = "mp3" if "mpeg" in (audio_content_type or "") else "wav"
                     # Public media_gen path so the banner gets a playable URL
                     # (workspace-bound outputs leave url="" and 404).
-                    from deeptutor.tools.media_gen_tool import _voice_run_dir
 
                     run_dir = _voice_run_dir()
                     artifacts = _write_media(
@@ -1220,9 +1221,7 @@ class TurnExecutor:
                             },
                         )
                         try:
-                            published = await self._publish_live_event(
-                                execution, sources_event
-                            )
+                            published = await self._publish_live_event(execution, sources_event)
                             assistant_events.append(published)
                         except Exception:
                             logger.warning(
@@ -1413,7 +1412,8 @@ class TurnExecutor:
                             content=partial_content,
                             capability=capability_name,
                             events=[],
-                            attachments=(generated_attachments or []) + voice_reply_attachments or None,
+                            attachments=(generated_attachments or []) + voice_reply_attachments
+                            or None,
                             metadata=(
                                 {
                                     **(

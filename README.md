@@ -58,8 +58,11 @@
 - Windows 11 + nssm 服务（`deeptutor`，源码可编辑安装，后端 :8001 / 前端 :3782）
 - 模型走本机 LiteLLM 网关（:4000，`claude-model` / `codex-model` 等）
 - 6 个本地 CLI 智能体经 nssm/计划任务常驻，DeepTutor 对话内经 `consult_subagent` 调用
+- Provider 认证契约（CLI `deeptutor provider login`）：Provider auth (`openai-codex` OAuth login; `github-copilot` validates an existing Copilot auth session; `codebuddy` validates CodeBuddy SDK auth and starts login when needed)
 
 ## 同步上游
+
+> 容器化部署（Docker）指南见 [docs-for-user/CONTAINERIZATION.md](docs-for-user/CONTAINERIZATION.md#temporary-local-codex-oauth-bridge)——本机 nssm 部署不用它，仅作上游契约保留。
 
 ```bash
 git fetch origin --tags

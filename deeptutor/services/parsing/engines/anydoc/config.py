@@ -20,9 +20,7 @@ class AnydocConfig:
 
 def resolve_anydoc_config() -> AnydocConfig:
     slice_ = (
-        load_document_parsing_settings()
-        .get("engines", {})
-        .get(DOCUMENT_PARSING_ENGINE_ANYDOC, {})
+        load_document_parsing_settings().get("engines", {}).get(DOCUMENT_PARSING_ENGINE_ANYDOC, {})
     )
     ocr = str(slice_.get("ocr") or "reject").strip().lower()
     if ocr not in ("reject", "hosted"):

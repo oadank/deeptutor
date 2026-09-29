@@ -64,6 +64,7 @@ BUILTIN_CAPABILITY_SPECS: dict[str, BuiltinCapabilitySpec] = {
                 "geogebra_analysis",
                 "imagegen",
                 "videogen",
+                "tts_speak",
             ],
             cli_aliases=["chat"],
         ),

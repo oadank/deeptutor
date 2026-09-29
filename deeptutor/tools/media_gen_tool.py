@@ -370,8 +370,8 @@ class TtsSpeakTool(BaseTool):
         )
 
     async def execute(self, **kwargs: Any) -> ToolResult:
-        from deeptutor.api.routers.voice import _parse_pcm_content_type, _pcm16_to_wav
         from deeptutor.services.voice import VoiceProviderError, synthesize_speech
+        from deeptutor.services.voice.audio import _parse_pcm_content_type, _pcm16_to_wav
 
         text = str(kwargs.get("text") or "").strip()
         if not text:

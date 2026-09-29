@@ -21,13 +21,25 @@ def _request(query: str = "") -> SimpleNamespace:
     return SimpleNamespace(query_params=QueryParams(query), headers={})
 
 
+def _flat_routes(app):
+    """Yield every route, flattening FastAPI >=0.141 lazy _IncludedRouter.
+
+    include_router() results are wrapped in a lazy _IncludedRouter (no
+    ``path``); its ``effective_route_contexts()`` yields prefix-resolved
+    stand-ins that carry ``.path`` and ``.dependant``.
+    """
+    for route in app.routes:
+        if getattr(route, "path", ""):
+            yield route
+        elif hasattr(route, "effective_route_contexts"):
+            yield from route.effective_route_contexts()
+
+
 def test_preview_route_requires_authentication(monkeypatch) -> None:
     from deeptutor.api.main import app
     from deeptutor.api.routers import auth
 
-    routes = [
-        route for route in app.routes if getattr(route, "path", "") == "/api/file-preview/pdf"
-    ]
+    routes = [route for route in _flat_routes(app) if route.path == "/api/file-preview/pdf"]
     assert len(routes) == 2  # GET source and POST uploaded bytes
     assert all(
         any(dependency.call is auth.require_auth for dependency in route.dependant.dependencies)

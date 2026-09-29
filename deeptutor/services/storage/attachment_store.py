@@ -212,7 +212,10 @@ class LocalDiskAttachmentStore:
         import shutil
         import subprocess
 
-        ffmpeg = shutil.which("ffmpeg") or r"C:\Users\oadan\AppData\Local\Microsoft\WinGet\Links\ffmpeg.exe"
+        ffmpeg = (
+            shutil.which("ffmpeg")
+            or r"C:\Users\oadan\AppData\Local\Microsoft\WinGet\Links\ffmpeg.exe"
+        )
         if not ffmpeg:
             return
         mp3 = target.with_suffix(".mp3")

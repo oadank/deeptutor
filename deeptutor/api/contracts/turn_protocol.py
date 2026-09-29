@@ -59,6 +59,9 @@ class StreamEventType(str, Enum):
     SESSION = "session"
     SESSION_META = "session_meta"
     WAIT_FOR_INPUT = "wait_for_input"
+    # [local patch 2026-09-02] injection-style interrupt: mid-turn user message
+    # rides the active turn's event stream so seq numbering stays contiguous.
+    USER_INJECTION = "user_injection"
     DONE = "done"
 
 

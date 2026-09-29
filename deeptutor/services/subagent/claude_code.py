@@ -17,13 +17,14 @@ from __future__ import annotations
 import json
 import logging
 import os
+from pathlib import Path
 import sys
 import tempfile
-from pathlib import Path
 from typing import Any
 
 from deeptutor.services.subagent.base import OnEvent, SubagentBackend
 from deeptutor.services.subagent.config import BackendConfig
+
 # 凭证唯一来源：配置中心 ~/.dsh/.credentials.yaml 的 LITELLM_API_KEY（env 已有则透传）。
 from deeptutor.services.subagent.credentials import litellm_key as _litellm_key
 from deeptutor.services.subagent.process import (
@@ -98,6 +99,8 @@ def _ensure_trusted_cwd(cwd: str | None) -> None:
         logger.info("claude trust pre-registered for %s", key)
     except Exception:
         logger.warning("claude trust pre-registration failed", exc_info=True)
+
+
 # Single-line cap for a tool-call header (e.g. the command inside ``Bash(…)``).
 _TOOL_HEADER_CHARS = 160
 # Telemetry/system events that are noise in the transcript (the CLI doesn't show
@@ -141,9 +144,7 @@ class ClaudeCodeBackend(SubagentBackend):
         """
         if self._entry_script and Path(self._entry_script).exists():
             return ["node", self._entry_script]
-        logger.warning(
-            "deeptutor-claude 入口脚本缺失（%s），退回裸调 claude", self._entry_script
-        )
+        logger.warning("deeptutor-claude 入口脚本缺失（%s），退回裸调 claude", self._entry_script)
         return [self.cli_command]
 
     def _child_env(self) -> dict[str, str | None]:
@@ -155,9 +156,7 @@ class ClaudeCodeBackend(SubagentBackend):
             "ANTHROPIC_BASE_URL": os.environ.get(
                 "DEEPTUTOR_CLAUDE_BASE_URL", "http://localhost:4000/"
             ),
-            "ANTHROPIC_MODEL": os.environ.get(
-                "DEEPTUTOR_CLAUDE_MODEL", "claude-model"
-            ),
+            "ANTHROPIC_MODEL": os.environ.get("DEEPTUTOR_CLAUDE_MODEL", "claude-model"),
             # LiteLLM 带门禁：不带 key 直接 401（实测）。
             "ANTHROPIC_AUTH_TOKEN": os.environ.get("DEEPTUTOR_CLAUDE_AUTH_TOKEN")
             or _litellm_key()

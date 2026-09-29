@@ -108,7 +108,9 @@ class AcpProcess:
         )
 
     async def session_new(self, cwd: str) -> str:
-        result = await self._request("session/new", {"cwd": cwd, "mcpServers": []}, SESSION_NEW_TIMEOUT_S)
+        result = await self._request(
+            "session/new", {"cwd": cwd, "mcpServers": []}, SESSION_NEW_TIMEOUT_S
+        )
         session_id = str((result or {}).get("sessionId") or "")
         if not session_id:
             raise AcpError(f"{self._name} ACP session/new: missing sessionId")
@@ -294,7 +296,9 @@ class AcpProcess:
                 for o in options
                 if isinstance(o, dict) and "allow" in str(o.get("optionId", "")).lower()
             ),
-            str(options[0].get("optionId")) if options and isinstance(options[0], dict) else "allow-once",
+            str(options[0].get("optionId"))
+            if options and isinstance(options[0], dict)
+            else "allow-once",
         )
         try:
             self._proc.stdin.write(
@@ -365,6 +369,3 @@ async def _drain_stderr(proc: asyncio.subprocess.Process, name: str) -> None:
         text = raw.decode("utf-8", "replace").strip()
         if text:
             logger.debug("%s ACP stderr: %s", name, text[:300])
-
-
-from contextlib import suppress  # noqa: E402  (used by close(); kept near use)

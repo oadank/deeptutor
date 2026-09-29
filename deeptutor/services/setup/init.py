@@ -221,7 +221,6 @@ def _seed_default_personas() -> None:
     """
     try:
         from deeptutor.multi_user.paths import get_admin_path_service
-        from deeptutor.services.persona.service import PersonaService
 
         admin_personas = get_admin_path_service().get_workspace_dir() / "personas"
         # [local patch 2026-09-02] Disabled: bundled EN presets kept re-seeding

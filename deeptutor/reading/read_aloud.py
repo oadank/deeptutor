@@ -81,7 +81,6 @@ class ReadAloudExtension:
         if not audio:
             return ""
         ext = "mp3" if "mpeg" in (content_type or "") else "wav"
-        from deeptutor.tools.media_gen_tool import _voice_run_dir
 
         run_dir = _voice_run_dir()
         artifacts = _write_media(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import importlib
 import logging
@@ -202,6 +203,12 @@ class RAGService:
 
         from deeptutor.logging import ProcessLogEvent, capture_process_logs
         from deeptutor.logging.process_stream import ProcessLogHandler
+
+        # emit 可能从任意线程回调；此处捕获创建时的 loop 作为投递目标。
+        try:
+            target_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            target_loop = None
 
         def should_skip_noisy_retrieve_log(event: ProcessLogEvent) -> bool:
             if event.level != "INFO":

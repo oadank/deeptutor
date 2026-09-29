@@ -134,6 +134,10 @@ async def test_search_forwards_lightrag_native_logs_to_event_sink(
     original_handlers = list(lightrag_logger.handlers)
     original_propagate = lightrag_logger.propagate
     original_level = lightrag_logger.level
+    # Guard the root too — an earlier test in a full-suite run may raise the
+    # root level, and records never reach the root-attached ProcessLogHandler.
+    root_logger = logging.getLogger()
+    original_root_level = root_logger.level
     events: list[tuple[str, str, dict]] = []
 
     async def event_sink(event_type: str, message: str, metadata: dict) -> None:
@@ -159,6 +163,7 @@ async def test_search_forwards_lightrag_native_logs_to_event_sink(
         lightrag_logger.handlers = []
         lightrag_logger.propagate = True
         lightrag_logger.setLevel(logging.INFO)
+        root_logger.setLevel(logging.INFO)
 
         await service.search(query="hello", kb_name="kb", event_sink=event_sink)
         await asyncio.sleep(0)
@@ -166,6 +171,7 @@ async def test_search_forwards_lightrag_native_logs_to_event_sink(
         lightrag_logger.handlers = original_handlers
         lightrag_logger.propagate = original_propagate
         lightrag_logger.setLevel(original_level)
+        root_logger.setLevel(original_root_level)
 
     raw_logs = [
         (message, metadata) for event_type, message, metadata in events if event_type == "raw_log"
@@ -194,6 +200,8 @@ async def test_search_forwards_graphrag_native_logs_to_event_sink(
     original_handlers = list(graphrag_logger.handlers)
     original_propagate = graphrag_logger.propagate
     original_level = graphrag_logger.level
+    root_logger = logging.getLogger()
+    original_root_level = root_logger.level
     events: list[tuple[str, str, dict]] = []
 
     async def event_sink(event_type: str, message: str, metadata: dict) -> None:
@@ -209,6 +217,7 @@ async def test_search_forwards_graphrag_native_logs_to_event_sink(
         graphrag_logger.handlers = []
         graphrag_logger.propagate = True
         graphrag_logger.setLevel(logging.INFO)
+        root_logger.setLevel(logging.INFO)
 
         await service.search(query="hello", kb_name="kb", event_sink=event_sink)
         await asyncio.sleep(0)
@@ -216,6 +225,7 @@ async def test_search_forwards_graphrag_native_logs_to_event_sink(
         graphrag_logger.handlers = original_handlers
         graphrag_logger.propagate = original_propagate
         graphrag_logger.setLevel(original_level)
+        root_logger.setLevel(original_root_level)
 
     assert any(
         event_type == "raw_log"
@@ -234,6 +244,11 @@ async def test_search_filters_noisy_vector_and_embedding_logs(
     lightrag_logger = logging.getLogger("lightrag")
     original_lightrag_level = lightrag_logger.level
     original_lightrag_propagate = lightrag_logger.propagate
+    # An earlier test in a full-suite run may raise the root level; records
+    # never reach the root-attached ProcessLogHandler then and the capture
+    # comes back empty. Guard the root too, same as the lightrag logger.
+    root_logger = logging.getLogger()
+    original_root_level = root_logger.level
     events: list[tuple[str, str, dict]] = []
 
     async def event_sink(event_type: str, message: str, metadata: dict) -> None:
@@ -257,12 +272,14 @@ async def test_search_filters_noisy_vector_and_embedding_logs(
     try:
         lightrag_logger.setLevel(logging.INFO)
         lightrag_logger.propagate = True
+        root_logger.setLevel(logging.INFO)
 
         await service.search(query="hello", kb_name="kb", event_sink=event_sink)
         await asyncio.sleep(0)
     finally:
         lightrag_logger.setLevel(original_lightrag_level)
         lightrag_logger.propagate = original_lightrag_propagate
+        root_logger.setLevel(original_root_level)
 
     raw_messages = [message for event_type, message, _metadata in events if event_type == "raw_log"]
     assert "Raw search results: 14 entities, 13 relations, 0 vector chunks" in raw_messages

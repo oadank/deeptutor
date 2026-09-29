@@ -111,8 +111,10 @@ class TranslationExtension:
             raw = await complete(
                 prompt=_prompt(context),
                 system_prompt=_SYSTEM_ZH if target_language == "zh" else _SYSTEM_EN,
-                max_tokens=4000,
                 temperature=0.1,
+                max_tokens=5_000,
+                max_retries=0,
+                response_format={"type": "json_object"},
             )
         translation = _translation(raw, target_language)
         is_zh = target_language == "zh"

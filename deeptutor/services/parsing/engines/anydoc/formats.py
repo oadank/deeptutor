@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from functools import lru_cache
-import importlib.metadata
 
 from .._versions import package_version, version_at_least
 

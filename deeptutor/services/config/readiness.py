@@ -178,6 +178,7 @@ TRANSLATABLE_ROW_LABELS: frozenset[str] = frozenset(
         "GeoGebra tool",
         "Image generation tool",
         "Video generation tool",
+        "Voice reply (TTS) tool",
         "Selected parser",
         "Knowledge bases",
         "Native YouTube",

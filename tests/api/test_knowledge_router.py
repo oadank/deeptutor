@@ -53,6 +53,20 @@ def _build_app() -> FastAPI:
     return app
 
 
+def _flat_routes(app):
+    """Yield every route, flattening FastAPI >=0.141 lazy _IncludedRouter.
+
+    include_router() results are wrapped in a lazy _IncludedRouter (no
+    ``path``); its ``effective_route_contexts()`` yields prefix-resolved
+    stand-ins that carry ``.path`` and ``.matches``.
+    """
+    for route in app.routes:
+        if getattr(route, "path", ""):
+            yield route
+        elif hasattr(route, "effective_route_contexts"):
+            yield from route.effective_route_contexts()
+
+
 @pytest.mark.parametrize(
     ("path", "route_path", "surface"),
     [
@@ -94,7 +108,7 @@ def test_learner_surface_uses_actual_kb_route_template(
 ) -> None:
     app = _build_app()
     scope = {"type": "http", "method": "GET", "path": path, "root_path": ""}
-    matched = next(route for route in app.router.routes if route.matches(scope)[0] is Match.FULL)
+    matched = next(route for route in _flat_routes(app) if route.matches(scope)[0] is Match.FULL)
     assert matched.path == route_path
     assert _learning_surface_for_path(path, "GET", route_path=matched.path) == surface
 

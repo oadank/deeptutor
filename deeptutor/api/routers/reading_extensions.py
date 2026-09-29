@@ -6,9 +6,8 @@ import asyncio
 import inspect
 import logging
 import re
-import time
-import unicodedata
 from typing import Any
+import unicodedata
 from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException
@@ -29,11 +28,20 @@ from deeptutor.services.llm.exceptions import LLMError
 
 logger = logging.getLogger(__name__)
 
-logger = logging.getLogger(__name__)
 router = APIRouter()
 # LLM-backed actions (translation / quiz) routinely need more than 30s on a
 # reasoning model; browser_speech is instant.
 ACTION_TIMEOUT_S = 120
+
+
+class UndeclaredResultError(ValueError):
+    """Plugin returned a result type its manifest does not declare.
+
+    Distinct from a plain ``ValueError`` (model grounding / shape failures,
+    which surface as 422): this is a plugin protocol violation, so it must
+    fall through to the 503 temporary-outage path and stay isolated from
+    other extensions.
+    """
 
 
 def _unavailable_detail(
@@ -135,6 +143,35 @@ def _verified_selection(candidate: str, unit_text: str) -> str:
     return ""
 
 
+def _discard_late_worker_result(worker: asyncio.Future) -> None:
+    """Retrieve abandoned worker failures and close unconsumed coroutines."""
+    if worker.cancelled():
+        return
+    try:
+        value = worker.result()
+        if inspect.iscoroutine(value):
+            value.close()
+    except Exception:
+        logger.exception("Reading extension worker failed after its request ended")
+
+
+def _record_reading_activity(
+    material_id: str,
+    *,
+    extension_id: str,
+    action: str,
+    locator: int,
+    result_type: str,
+) -> None:
+    LearningStore().record_reading_activity(
+        material_id,
+        extension_id=extension_id,
+        action=action,
+        locator=locator,
+        result_type=result_type,
+    )
+
+
 @router.get("/extensions")
 async def list_extensions() -> list[dict[str, Any]]:
     allowed = allowed_reading_extensions()
@@ -224,7 +261,9 @@ async def run_extension_action(
             else ReadingExtensionResult.model_validate(value)
         )
         if result.type not in extension.manifest.result_types:
-            raise ValueError(f"Extension returned undeclared result type {result.type!r}.")
+            raise UndeclaredResultError(
+                f"Extension returned undeclared result type {result.type!r}."
+            )
         dumped = result.model_dump()
         quiz_payload = dumped.get("payload")
         if dumped.get("type") == "quiz" and isinstance(quiz_payload, dict):
@@ -248,6 +287,19 @@ async def run_extension_action(
                 reason=str(exc),
                 message="This reading action needs a working language model.",
             ),
+        ) from exc
+    except UndeclaredResultError as exc:
+        # Plugin protocol violation — a plugin outage, not a user-actionable
+        # model problem. 503 keeps failures isolated from other extensions.
+        logger.warning(
+            "Reading extension %s action %s rejected: %s",
+            extension_id,
+            action,
+            exc,
+        )
+        raise HTTPException(
+            status_code=503,
+            detail=_unavailable_detail(reason=str(exc)),
         ) from exc
     except ValueError as exc:
         # Model-shape / grounding failures are user-actionable — do not dress

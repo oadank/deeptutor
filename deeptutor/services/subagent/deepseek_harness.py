@@ -54,9 +54,8 @@ _ACP_CONFIG = Path(
 
 def _acp_ready() -> bool:
     return (
-        (_ACP_CHECKOUT / "packages" / "examples" / "acp-demo" / "src" / "bin.ts").is_file()
-        and _ACP_CONFIG.is_file()
-    )
+        _ACP_CHECKOUT / "packages" / "examples" / "acp-demo" / "src" / "bin.ts"
+    ).is_file() and _ACP_CONFIG.is_file()
 
 
 class DeepSeekHarnessBackend(SubagentBackend):
@@ -73,7 +72,9 @@ class DeepSeekHarnessBackend(SubagentBackend):
             display_name=self.display_name,
             available=ok or sdk or acp,
             version=text if ok else ("Python SDK" if sdk else ("ACP" if acp else "")),
-            detail="" if ok or sdk or acp else not_found_detail(text, "dsh CLI / Python SDK not found"),
+            detail=""
+            if ok or sdk or acp
+            else not_found_detail(text, "dsh CLI / Python SDK not found"),
         )
 
     async def consult(

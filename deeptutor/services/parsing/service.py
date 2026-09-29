@@ -165,7 +165,7 @@ class ParseService:
 
         supported = parser.supported_formats()
         if supported and not _matches_supported_format(source_path, supported):
-            if engine is not None:
+            if engine_explicit:
                 # The caller pinned this engine by name — keep the loud error.
                 suffix = _display_extension(source_path, supported)
                 raise ParserError(

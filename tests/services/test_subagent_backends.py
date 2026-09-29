@@ -176,6 +176,11 @@ async def test_hermes_consult_captures_answer_and_session(monkeypatch) -> None:
     assert events[-1].meta["merge_id"] == "hermes:final"
 
 
+# This fork rewrote OpenClaw on the Agent Client Protocol (openclaw acp,
+# services/subagent/acp_client.py) — the upstream gateway command builder
+# (_build_command) and stream_process_lines plumbing no longer exist, so
+# these upstream implementation-detail tests have nothing to assert against.
+@pytest.mark.skip(reason="fork: openclaw speaks ACP; upstream gateway plumbing removed")
 def test_openclaw_command_owns_stable_session_key() -> None:
     from deeptutor.services.subagent.openclaw import OpenClawBackend
 
@@ -198,6 +203,7 @@ def test_openclaw_command_owns_stable_session_key() -> None:
     assert cmd[-2:] == ["--message", "Be concise\n\ninspect"]
 
 
+@pytest.mark.skip(reason="fork: openclaw speaks ACP; upstream gateway plumbing removed")
 @pytest.mark.asyncio
 async def test_openclaw_consult_parses_gateway_json(monkeypatch) -> None:
     from deeptutor.services.subagent import openclaw as openclaw_mod

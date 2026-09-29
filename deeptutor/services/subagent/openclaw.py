@@ -24,7 +24,6 @@ from deeptutor.services.subagent.config import BackendConfig
 from deeptutor.services.subagent.process import not_found_detail, probe_version
 from deeptutor.services.subagent.types import (
     EVENT_ERROR,
-    EVENT_LOG,
     EVENT_REASONING,
     EVENT_TEXT,
     EVENT_TOOL,
@@ -36,7 +35,9 @@ from deeptutor.services.subagent.types import (
 logger = logging.getLogger(__name__)
 
 _STATE_DIR = Path(os.environ.get("DEEPTUTOR_OPENCLAW_STATE_DIR") or Path.home() / ".openclaw")
-_EXEC = Path(os.environ.get("DEEPTUTOR_OPENCLAW_EXEC") or Path.home() / "AppData/Roaming/npm/openclaw.exe")
+_EXEC = Path(
+    os.environ.get("DEEPTUTOR_OPENCLAW_EXEC") or Path.home() / "AppData/Roaming/npm/openclaw.exe"
+)
 
 
 def _spawn_spec() -> tuple[str, list[str], str] | None:
@@ -88,14 +89,18 @@ class OpenClawBackend(SubagentBackend):
         if spec is None:
             result = ConsultResult(session_id=session_id)
             result.success = False
-            result.error = "openclaw executable not found (DEEPTUTOR_OPENCLAW_EXEC / npm openclaw.exe)"
+            result.error = (
+                "openclaw executable not found (DEEPTUTOR_OPENCLAW_EXEC / npm openclaw.exe)"
+            )
             await on_event(SubagentEvent(kind=EVENT_ERROR, text=result.error, raw={}))
             return result
 
         command, args, state_dir = spec
         result = ConsultResult(session_id=session_id)
 
-        async def emit(kind: str, text: str, raw: dict[str, Any], meta: dict[str, Any] | None = None) -> None:
+        async def emit(
+            kind: str, text: str, raw: dict[str, Any], meta: dict[str, Any] | None = None
+        ) -> None:
             result.event_count += 1
             await on_event(SubagentEvent(kind=kind, text=text, raw=raw, meta=meta or {}))
 
@@ -128,7 +133,12 @@ class OpenClawBackend(SubagentBackend):
                         {"merge_id": "openclaw:text"},
                     )
             elif kind == "agent_thought_chunk" and str(content.get("type") or "") == "text":
-                await emit(EVENT_REASONING, str(content.get("text") or ""), update, {"merge_id": "openclaw:rsn"})
+                await emit(
+                    EVENT_REASONING,
+                    str(content.get("text") or ""),
+                    update,
+                    {"merge_id": "openclaw:rsn"},
+                )
             elif kind in ("tool_call", "tool_call_update"):
                 title = str(update.get("title") or "tool")
                 raw_input = update.get("rawInput")
@@ -138,7 +148,10 @@ class OpenClawBackend(SubagentBackend):
         try:
             async with self._consult_lock:
                 proc = await get_shared(
-                    self.kind, command=command, args=args, cwd=state_dir,
+                    self.kind,
+                    command=command,
+                    args=args,
+                    cwd=state_dir,
                     env={"OPENCLAW_STATE_DIR": state_dir},
                 )
                 sid = session_id or ""

@@ -23,6 +23,11 @@ async def test_list_builtin_tools_marks_toggleable_set(
     can render the right control per row."""
     settings_file = tmp_path / "interface.json"
     monkeypatch.setattr(settings_router, "_settings_file", lambda: settings_file)
+    # The read path (get_enabled_optional_tools) resolves through
+    # interface_settings, so it needs its own patch — otherwise a machine
+    # with a real data/user/settings/interface.json leaks stale saved
+    # toggles into this "fresh settings" assertion.
+    monkeypatch.setattr(interface_settings, "_interface_settings_file", lambda: settings_file)
 
     response = await tools_router.list_builtin_tools()
     by_name = {tool.name: tool for tool in response.tools}
@@ -51,6 +56,7 @@ async def test_list_builtin_tools_marks_toggleable_set(
         "geogebra_analysis",
         "imagegen",
         "videogen",
+        "tts_speak",
     }
 
     # Locked-on (non-toggleable, non-coming-soon) tools always report

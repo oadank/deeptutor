@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from types import SimpleNamespace
 
 import pytest
@@ -229,11 +230,20 @@ async def test_rag_service_hides_low_level_invalid_index_error_in_raw_logs(
     service._pipelines["llamaindex"] = pipeline
     events: list[tuple[str, str, dict]] = []
 
+    # Guard the root level — an earlier test in a full-suite run may raise
+    # it, and records never reach the root-attached ProcessLogHandler then.
+    root_logger = logging.getLogger()
+    original_root_level = root_logger.level
+
     async def event_sink(event_type: str, message: str, metadata: dict) -> None:
         events.append((event_type, message, metadata))
 
-    result = await service.search("what is this?", "kb", event_sink=event_sink)
-    await asyncio.sleep(0)
+    try:
+        root_logger.setLevel(logging.INFO)
+        result = await service.search("what is this?", "kb", event_sink=event_sink)
+        await asyncio.sleep(0)
+    finally:
+        root_logger.setLevel(original_root_level)
 
     raw_logs = [message for event_type, message, _ in events if event_type == "raw_log"]
     assert result["error_type"] == "invalid_embedding_index"

@@ -165,7 +165,7 @@ class LoopPromptAssembler:
                 PromptBlock(
                     "tool_call_policy", tool_call_policy.format(limit=MAX_PARALLEL_TOOL_CALLS)
                 )
-            )        # Capability playbooks sit high so they frame the whole turn when active;
+            )  # Capability playbooks sit high so they frame the whole turn when active;
         # empty blocks are omitted by ``system_prompt``'s join.
         blocks.extend(capability_blocks or [])
         if context.sidebar_context:

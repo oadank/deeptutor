@@ -67,9 +67,10 @@ def _term_comes_from_selection(term: str, selection: str) -> bool:
     if not normalized_term or not normalized_selection:
         return False
     if re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9' -]*", normalized_term):
+        # Single words must be whole words in the selection — the bare
+        # substring fallback below would let "ified" slip through "verified".
         pattern = rf"(?<!\w){re.escape(normalized_term)}(?!\w)"
-        if re.search(pattern, normalized_selection):
-            return True
+        return re.search(pattern, normalized_selection) is not None
     if normalized_term in normalized_selection:
         return True
     # Soft match: models may add quotes/ellipsis the page does not have.
