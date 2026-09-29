@@ -1383,6 +1383,7 @@
         "session",
         "session_meta",
         "wait_for_input",
+        "user_injection",
         "done"
       ],
       "title": "StreamEventType",

@@ -22,7 +22,10 @@ function sourceFiles(relativeRoot: string): string[] {
     for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
       const target = path.join(directory, entry.name);
       if (entry.isDirectory()) visit(target);
-      else if (/\.(?:ts|tsx)$/.test(entry.name)) result.push(target);
+      else if (/\.(?:ts|tsx)$/.test(entry.name))
+        // Normalize to POSIX-style relative paths so allowlists written with
+        // forward slashes match on Windows as well as on CI (Linux).
+        result.push(path.relative(root, target).split(path.sep).join("/"));
     }
   };
   visit(start);
@@ -40,7 +43,6 @@ test("browser storage methods stay behind the shared boundary", () => {
         fs.readFileSync(file, "utf8"),
       ),
     )
-    .map((file) => path.relative(root, file));
   assert.deepEqual(violations, []);
 });
 
@@ -51,7 +53,6 @@ test("raw fetch is limited to the shared API client and media preview", () => {
   ]);
   const violations = allSources
     .filter((file) => /\bfetch\(/.test(fs.readFileSync(file, "utf8")))
-    .map((file) => path.relative(root, file))
     .filter((file) => !allow.has(file));
   assert.deepEqual(violations, []);
 });
@@ -61,14 +62,12 @@ test("source modules cannot import Next route pages", () => {
     .filter((file) =>
       /from\s+["'][^"']*\/page["']/.test(fs.readFileSync(file, "utf8")),
     )
-    .map((file) => path.relative(root, file));
   assert.deepEqual(violations, []);
 });
 
 test("the canonical tooltip owns every tooltip role and guards import paths", () => {
   const roleOwners = allSources
     .filter((file) => /role=["']tooltip["']/.test(fs.readFileSync(file, "utf8")))
-    .map((file) => path.relative(root, file));
   assert.deepEqual(roleOwners.sort(), [
     "shared/ui/Tooltip.tsx",
     "shared/ui/TooltipLayer.tsx",
@@ -82,7 +81,6 @@ test("the canonical tooltip owns every tooltip role and guards import paths", ()
         fs.readFileSync(file, "utf8"),
       ),
     )
-    .map((file) => path.relative(root, file));
   assert.deepEqual(legacyImports, []);
 
   const eslintConfig = fs.readFileSync(path.join(root, "eslint.config.mjs"), "utf8");

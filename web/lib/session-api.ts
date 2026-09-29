@@ -423,3 +423,20 @@ export async function updateBranchSelection(
 export function sessionWorkspaceId(session?: SessionSummary): string {
   return session?.content_workspace_id ?? session?.preferences?.workspace_id ?? '';
 }
+
+/**
+ * [local patch 2026-09-03] Streaming watchdog probe: which turns are still
+ * alive for a session. A turn missing from the reply means the stream died
+ * silently and the UI should settle the session as completed.
+ */
+export async function fetchActiveTurns(sessionId: string): Promise<ActiveTurnSummary[]> {
+  const response = await apiFetch(
+    apiUrl(`/api/sessions/${encodeURIComponent(sessionId)}/active-turn`),
+    { cache: 'no-store' },
+  );
+  if (!response.ok) {
+    throw new Error(`active-turn probe failed with status ${response.status}`);
+  }
+  const data = await expectJson<{ active_turns?: ActiveTurnSummary[] }>(response);
+  return data.active_turns ?? [];
+}

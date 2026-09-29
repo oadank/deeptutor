@@ -154,5 +154,6 @@ test('persisted workspace presentation metadata survives session hydration', () 
     sha256: 'abc123',
     title: 'Lesson image',
     caption: 'A generated illustration',
+    transcript: undefined,
   })
 })

@@ -36,6 +36,7 @@ import {
   updateBranchSelection,
   updateSessionTitle,
   updateSessionReplyLanguage,
+  fetchActiveTurns,
   type MessageTracePage,
   type SessionMessage,
 } from "@/lib/session-api";
@@ -1726,15 +1727,8 @@ export function ChatStateAdapterProvider({
         if (!session.isStreaming || !session.sessionId || !session.activeTurnId)
           continue;
         try {
-          const resp = await fetch(
-            `/api/sessions/${encodeURIComponent(session.sessionId)}/active-turn`,
-            { cache: "no-store" },
-          );
-          if (!resp.ok) continue;
-          const data = (await resp.json()) as {
-            active_turns?: Array<{ id?: string; status?: string }>;
-          };
-          const live = (data.active_turns ?? []).some(
+          const activeTurns = await fetchActiveTurns(session.sessionId);
+          const live = activeTurns.some(
             (turn) => turn.id === session.activeTurnId,
           );
           if (!live) {

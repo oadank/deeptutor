@@ -77,7 +77,9 @@ test("browser speech is stoppable and cannot continue after navigation", () => {
   assert.match(component, /window\.speechSynthesis\?\.cancel\(\)/);
   assert.match(component, /utterance\.onend = \(\) => setSpeaking\(false\)/);
   assert.match(component, /utterance\.onerror = \(\) => setSpeaking\(false\)/);
-  assert.match(component, /\}, \[locator, materialId\]\);/);
+  // The cleanup effect must stay keyed on at least the passage coordinates;
+  // extra keys (e.g. audioRef) are fine.
+  assert.match(component, /\}, \[locator, materialId[^\]]*\]\);/);
   assert.match(component, /aria-label=\{t\("Stop reading aloud"\)\}/);
 });
 

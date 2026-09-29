@@ -581,6 +581,8 @@ export default memo(function ChatComposer({
 
   // [local patch 2026-09-02] 语音直发（dsh 体验）：转写文本不再写输入框，
   // 由 handleVoiceClip 组装语音消息（横幅附件 + 识别内容）直接发送。
+  const pendingVoiceSendRef = useRef<string | null>(null);
+  const doSendRef = useRef<(content: string) => void>(() => {});
   const handleTranscript = useCallback((text: string) => {
     void text;
   }, []);
@@ -595,8 +597,6 @@ export default memo(function ChatComposer({
     [onAddFiles],
   );
   // 附件 state（ChatWorkspace）落地后自动直发：content 由 doSend 加语音前缀。
-  const pendingVoiceSendRef = useRef<string | null>(null);
-  const doSendRef = useRef<(content: string) => void>(() => {});
   const [queuedCount, setQueuedCount] = useState(0);
   useEffect(() => {
     const text = pendingVoiceSendRef.current;
@@ -692,7 +692,10 @@ export default memo(function ChatComposer({
     [attachments, focusTextarea, onSend],
   );
   // [local patch 2026-09-02] 桥给录音直发 effect（attachments 落地后自动发）。
-  doSendRef.current = doSend;
+  // Ref writes must happen in an effect, never during render.
+  useEffect(() => {
+    doSendRef.current = doSend;
+  }, [doSend]);
 
   const hasReferences =
     !!attachments.length ||

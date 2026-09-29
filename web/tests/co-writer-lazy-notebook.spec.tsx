@@ -37,7 +37,10 @@ it("opens and closes the dynamically loaded notebook picker without changing the
     render(<CoWriterWorkspace docId="document-1" />);
     expect(await screen.findByDisplayValue("Existing draft content")).toBeInTheDocument();
     fireEvent.click(screen.getByRole("button", { name: "Save to Notebook" }));
-    const dialog = await screen.findByRole("dialog", { name: "Save to Notebook" });
+    // The picker is a lazy dynamic import: under a fully parallel local test
+    // run the chunk can take longer than the default 1s to land, so wait a
+    // little longer instead of flaking on slow machines.
+    const dialog = await screen.findByRole("dialog", { name: "Save to Notebook" }, { timeout: 5_000 });
     expect(await within(dialog).findByText("My notebook")).toBeInTheDocument();
     fireEvent.click(within(dialog).getByRole("button", { name: "Close" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());

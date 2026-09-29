@@ -18,6 +18,7 @@ import ChatSpaceMenu, {
   type ChatSpaceSelectionCounts,
 } from "@/components/chat/space/ChatSpaceMenu";
 import { agentGlyph } from "@/components/agents/agent-icons";
+import { browserStorage } from "@/shared/storage";
 
 // [local patch 2026-09-02] 聊天输入草稿持久化 key（切页/刷新不丢输入）
 const COMPOSER_DRAFT_KEY = "deeptutor:composer-draft";
@@ -193,7 +194,7 @@ export const ComposerInput = memo(
     // setInputBoth（含发送后清空），恢复只在首次挂载读一次。
     const [input, setInput] = useState(() => {
         try {
-            return window.localStorage.getItem(COMPOSER_DRAFT_KEY) ?? "";
+            return browserStorage.readRaw("local", COMPOSER_DRAFT_KEY) ?? "";
         } catch {
             return "";
         }
@@ -244,8 +245,8 @@ export const ComposerInput = memo(
       inputRef.current = value;
       setInput(value);
       try {
-          if (value === "") window.localStorage.removeItem(COMPOSER_DRAFT_KEY);
-          else window.localStorage.setItem(COMPOSER_DRAFT_KEY, value);
+          if (value === "") browserStorage.removeRaw("local", COMPOSER_DRAFT_KEY);
+          else browserStorage.writeRaw("local", COMPOSER_DRAFT_KEY, value);
       } catch {
           // 隐私模式/配额异常时静默降级为纯内存草稿
       }

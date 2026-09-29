@@ -178,6 +178,7 @@ export const CHAT_CAPABILITIES: ChatCapabilityDef[] = [
       "paper_search",
       "imagegen",
       "videogen",
+      "tts_speak",
     ],
     defaultTools: [],
     // Not offered in Home's action menu: it is the Mastery workspace's own
