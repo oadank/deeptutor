@@ -1,5 +1,6 @@
 'use client'
 
+import { pageGridClass } from '@/components/layout/FeaturePage'
 import { useLibraryFilter, WorkspaceLabel } from '@/components/learning/LibraryWorkspace'
 import { libraryItemKey } from '@/lib/learning-library'
 import { LearningCardContent } from '@/components/learning/LearningCard'
@@ -28,6 +29,7 @@ import { useTranslation } from 'react-i18next'
 
 import type { Book, BookStatus } from '@/lib/book-types'
 import { formatRelativeTime } from '@/lib/relative-time'
+import Tooltip from '@/shared/ui/Tooltip'
 
 const STATUS_STYLES: Record<BookStatus, { label: string; className: string; dot: string }> = {
   draft: {
@@ -201,7 +203,7 @@ export default function BookLibrary({
             {t('No books match “{{query}}”.', { query })}
           </div>
         ) : (
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
+          <div className={pageGridClass(3)}>
             {filtered.map(book => {
               const isPendingDelete = pendingDeleteId === libraryItemKey(book, book.id)
               const status = STATUS_STYLES[book.status] || STATUS_STYLES.draft
@@ -248,29 +250,33 @@ export default function BookLibrary({
                   )}
 
                   {book.can_delete !== false && (
-                    <button
-                      type="button"
-                      onClick={event => {
-                        event.stopPropagation()
-                        if (isPendingDelete) {
-                          onDeleteBook(book.id, book.content_workspace_id ?? '')
-                          setPendingDeleteId(null)
-                        } else {
-                          setPendingDeleteId(libraryItemKey(book, book.id))
-                        }
-                      }}
-                      title={isPendingDelete ? t('Click again to confirm') : t('Delete book')}
-                      // Permanently visible on touch, where there is no hover
-                      // to reveal it — a control that only appears on hover
-                      // does not exist on a phone.
-                      className={`absolute right-2 top-2 z-10 rounded-md p-1.5 transition-colors ${
-                        isPendingDelete
-                          ? 'bg-rose-500/15 text-rose-600 dark:text-rose-400'
-                          : 'text-[var(--muted-foreground)]/70 hover:bg-rose-500/10 hover:text-rose-600 sm:opacity-0 sm:group-hover:opacity-100 dark:hover:text-rose-400'
-                      }`}
-                    >
-                      <Trash2 size={13} />
-                    </button>
+                    <div className="absolute right-2 top-2 z-10">
+                      <Tooltip label={isPendingDelete ? t('Click again to confirm') : t('Delete book')}>
+                        <button
+                          type="button"
+                          onClick={event => {
+                            event.stopPropagation()
+                            if (isPendingDelete) {
+                              onDeleteBook(book.id, book.content_workspace_id ?? '')
+                              setPendingDeleteId(null)
+                            } else {
+                              setPendingDeleteId(libraryItemKey(book, book.id))
+                            }
+                          }}
+                          aria-label={isPendingDelete ? t('Click again to confirm') : t('Delete book')}
+                          // Permanently visible on touch, where there is no hover
+                          // to reveal it — a control that only appears on hover
+                          // does not exist on a phone.
+                          className={`rounded-md p-1.5 transition-colors ${
+                            isPendingDelete
+                              ? 'bg-rose-500/15 text-rose-600 dark:text-rose-400'
+                              : 'text-[var(--muted-foreground)]/70 hover:bg-rose-500/10 hover:text-rose-600 sm:opacity-0 sm:group-hover:opacity-100 sm:focus-visible:opacity-100 dark:hover:text-rose-400'
+                          }`}
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      </Tooltip>
+                    </div>
                   )}
 
                   {/* Body */}
@@ -323,15 +329,13 @@ export default function BookLibrary({
                         {(book.reading?.percent ?? 0) > 0 && (
                           <span
                             className="inline-flex items-center gap-1 text-[var(--primary)]"
-                            title={t('{{visited}} of {{total}} chapters read', {
-                              visited: book.reading?.visited_pages ?? 0,
-                              total: book.reading?.total_pages ?? 0,
-                            })}
                           >
                             <BookOpen size={11} />
                             {t('{{percent}}% read', {
                               percent: book.reading?.percent ?? 0,
-                            })}
+                            })}{' '}
+                            ({book.reading?.visited_pages ?? 0}/
+                            {book.reading?.total_pages ?? 0})
                           </span>
                         )}
                       </div>

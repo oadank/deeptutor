@@ -1,5 +1,6 @@
 "use client";
 
+import { PageContainer, PAGE_DESCRIPTION_CLASS } from '@/components/layout/FeaturePage'
 import { scopedUrl } from "@/lib/workspace-scope";
 import { MASTERY_HOME, masterySessionRoute as existingMasterySessionRoute, masterySessionsRoute } from "@/lib/learning-routes";
 
@@ -55,39 +56,7 @@ import {
   type TopicSession,
 } from "@/lib/learning-api";
 import { setPendingPrompt } from "@/lib/pending-prompt";
-
-const NEXT_LABELS: Record<string, { zh: string; en: string }> = {
-  probe: {
-    zh: "先用一道探查题看看你是否已经掌握",
-    en: "Start with a probe and test out if you already know it",
-  },
-  practice: {
-    zh: "继续练习，直到稳定越过掌握门槛",
-    en: "Practice until you reliably clear the mastery gate",
-  },
-  assess: {
-    zh: "用自己的话讲清楚这个概念",
-    en: "Explain this clearly in your own words",
-  },
-  review: { zh: "复习这个记忆信标", en: "Revisit this memory beacon" },
-  answer_pending: {
-    zh: "完成导师正在等待的回答",
-    en: "Complete the answer your tutor is waiting for",
-  },
-  complete: {
-    zh: "整片疆域已经点亮",
-    en: "The whole territory is illuminated",
-  },
-};
-
-const NEXT_CTA_LABELS: Record<string, { zh: string; en: string }> = {
-  review: { zh: "开始本次复习", en: "Start this review" },
-  answer_pending: {
-    zh: "回到原会话作答",
-    en: "Answer in the original session",
-  },
-  complete: { zh: "继续自由探索", en: "Keep exploring" },
-};
+import { NEXT_CTA_LABELS, NEXT_LABELS } from "@/components/space/learning/next-step-copy";
 
 export default function MasteryTopicPage() {
   const params = useParams<{ pathId: string }>();
@@ -349,8 +318,8 @@ export default function MasteryTopicPage() {
     // Under `lg` the columns stack and the page scrolls normally — a phone has
     // no second column to balance, and a fixed-height stack there would just
     // be three tiny scrollers.
-    <main className="mastery-shell flex h-full flex-col overflow-y-auto lg:overflow-hidden [scrollbar-gutter:stable]">
-      <div className="mx-auto flex w-full min-h-0 max-w-[1180px] flex-1 flex-col px-4 pb-40 pt-6 sm:px-7 sm:pb-10 lg:px-8 lg:py-8">
+    <main className="mastery-shell flex h-full flex-col overflow-y-auto [scrollbar-gutter:stable]">
+      <PageContainer className="flex min-h-0 flex-1 flex-col pb-40 sm:pb-10">
         <div className="flex items-center justify-between gap-3">
           <Link
             href={scopedUrl(MASTERY_HOME)}
@@ -397,7 +366,7 @@ export default function MasteryTopicPage() {
           </div>
         </div>
 
-        <header className="mt-6 flex flex-col gap-5 lg:flex-row lg:items-end lg:justify-between">
+        <header className="dt-page-header mt-5 mb-6 flex flex-col gap-4">
           <div className="min-w-0">
             <div className="flex items-center gap-3">
               <div className="min-w-0">
@@ -406,13 +375,13 @@ export default function MasteryTopicPage() {
                   storedName={topic.name}
                   onRename={handleRename}
                 />
-                <p className="mt-1 max-w-3xl text-sm text-[var(--muted-foreground)]">
+                <p className={PAGE_DESCRIPTION_CLASS}>
                   {topic.metadata.description || topic.metadata.goal}
                 </p>
               </div>
             </div>
             {sourceLabels.length > 0 && (
-              <div className="mt-4 flex flex-wrap items-center gap-2 pl-0 sm:pl-[60px]">
+              <div className="mt-4 flex flex-wrap items-center gap-2">
                 {sourceLabels.map((source) => (
                   <span
                     key={source.id}
@@ -595,7 +564,7 @@ export default function MasteryTopicPage() {
               </div>
               {/* The outline is the tall thing on this page, so it is the one
                   that scrolls. Everything else keeps its place. */}
-              <div className="min-h-0 lg:flex-1 lg:overflow-y-auto lg:pr-1">
+              <div className="min-h-0 lg:min-h-[260px] lg:flex-1 lg:overflow-y-auto lg:pr-1">
                 {topicView === "outline" ? (
                 <ModuleOutline
                   topic={topic}
@@ -662,7 +631,7 @@ export default function MasteryTopicPage() {
             />
           </div>
         </div>
-      </div>
+      </PageContainer>
       {editorOpen && (
         <EditTopicRouteDialog
           topic={topic}

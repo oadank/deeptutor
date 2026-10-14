@@ -478,7 +478,7 @@ async def selective_access_log(request, call_next):
         and response.status_code in {401, 403}
     ):
         response = RedirectResponse(
-            "/watching?account=authorization_login_required",
+            "/reading?account=authorization_login_required",
             status_code=303,
             headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
         )
@@ -536,6 +536,7 @@ from deeptutor.api.routers import (
     file_preview,
     imports,
     knowledge,
+    learning_journal,
     marginnote4,
     mastery_path,
     mcp_settings,
@@ -545,6 +546,7 @@ from deeptutor.api.routers import (
     partner_groups,
     partners,
     personas,
+    plugins,
     practice,
     question,
     question_notebook,
@@ -558,6 +560,7 @@ from deeptutor.api.routers import (
     space_mcp,
     subagents,
     system,
+    task_board,
     textbook_manifest,
     unified_ws,
     video_learning,
@@ -636,6 +639,9 @@ app.include_router(
 )
 app.include_router(co_writer.router, prefix="/api", tags=["documents"], dependencies=_auth)
 app.include_router(notebook.router, prefix="/api", tags=["notebooks"], dependencies=_auth)
+app.include_router(
+    task_board.router, prefix="/api/task-board", tags=["task-board"], dependencies=_auth
+)
 app.include_router(book.router, prefix="/api", tags=["books"], dependencies=_auth)
 app.include_router(book.ws_router, prefix="/ws", tags=["books"])
 app.include_router(reading.router, prefix="/api/reading", tags=["reading"], dependencies=_auth)
@@ -646,6 +652,12 @@ app.include_router(
     dependencies=_auth,
 )
 app.include_router(memory.router, prefix="/api/memory", tags=["memory"], dependencies=_auth)
+app.include_router(
+    learning_journal.router,
+    prefix="/api/learning-journal",
+    tags=["learning-journal"],
+    dependencies=_auth,
+)
 app.include_router(
     capabilities_settings.router,
     prefix="/api/capabilities",
@@ -728,6 +740,7 @@ app.include_router(
     textbook_manifest.router, prefix="/api", tags=["textbook-manifest"], dependencies=_auth
 )
 app.include_router(personas.router, prefix="/api", tags=["personas"], dependencies=_auth)
+app.include_router(plugins.router, prefix="/api/plugins", tags=["plugins"])
 app.include_router(tools_router.router, prefix="/api/tools", tags=["tools"], dependencies=_auth)
 app.include_router(system.router, prefix="/api/system", tags=["system"], dependencies=_auth)
 app.include_router(voice.router, prefix="/api/voice", tags=["voice"], dependencies=_auth)

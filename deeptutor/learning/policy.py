@@ -85,9 +85,45 @@ def is_assessed_mastered(progress: LearningProgress, kp: KnowledgePoint) -> bool
     * MEMORY / PROCEDURE: recency-weighted accuracy ≥ the type's threshold.
     * CONCEPT / DESIGN: a recorded qualitative pass (``mastery_assess``).
     """
+    if not set(kp.required_visual_tasks).issubset(visual_achievements(progress, kp.id)):
+        return False
     if kp.type in QUALITATIVE_TYPES:
         return bool(progress.qualitative_mastery.get(kp.id, False))
     return progress.mastery_levels.get(kp.id, 0.0) >= gate_threshold(kp.type)
+
+
+def visual_achievements(progress: LearningProgress, kp_id: str) -> list[str]:
+    """Independent source-verified visual tasks, separate from generic text scores."""
+    return sorted(
+        {
+            event.visual_context["task"]
+            for event in progress.learning_evidence
+            if event.knowledge_point_id == kp_id
+            and event.result == "correct"
+            and event.visual_context.get("task")
+            and event.visual_context.get("key_status") == "verified"
+            and not event.hints_used
+        }
+    )
+
+
+def learning_stage(progress: LearningProgress, kp_id: str) -> str:
+    attempts = [
+        item
+        for item in progress.quiz_attempts
+        if item.knowledge_point_id == kp_id and not item.voided
+    ]
+    evidence = [item for item in progress.learning_evidence if item.knowledge_point_id == kp_id]
+    if any(item.independent and item.is_correct for item in attempts) or any(
+        item.assessment_type == "qualitative" and item.result == "correct" and not item.hints_used
+        for item in evidence
+    ):
+        return "independently_demonstrated"
+    if any(not item.independent for item in attempts) or any(item.hints_used for item in evidence):
+        return "practiced_with_help"
+    if attempts or evidence:
+        return "practiced_not_demonstrated"
+    return "explained" if kp_id in progress.explained_objectives else "not_yet_covered"
 
 
 def mastery_source(progress: LearningProgress, kp: KnowledgePoint) -> str:
@@ -150,6 +186,7 @@ class NextStep:
     * ``answer_pending`` — a posed question awaits the learner's answer.
     * ``review`` — a spaced-repetition item is due.
     * ``probe`` — an untouched objective; test out before teaching.
+    * ``teach`` — teach an untouched objective before assessing it, by request.
     * ``practice`` — a quantitative objective below its gate.
     * ``assess`` — a qualitative objective awaiting a Feynman-style check.
     * ``complete`` — every objective mastered, nothing due.
@@ -282,7 +319,12 @@ def next_objective(
             status = objective_status(progress, kp)
             gate = gate_kind(kp)
             if status == "new":
-                action = "probe"
+                action = (
+                    "teach"
+                    if progress.learner_profile is not None
+                    and progress.learner_profile.teaching_strategy == "teach_first"
+                    else "probe"
+                )
             elif gate == "qualitative":
                 action = "assess"
             else:
@@ -299,7 +341,11 @@ def next_objective(
                 mastery=display_mastery(progress, kp),
                 threshold=gate_threshold(kp.type),
                 reason=(
-                    "Untouched objective — probe first to let the learner test out."
+                    (
+                        "Untouched objective — teach before assessing, as the learner requested."
+                        if action == "teach"
+                        else "Untouched objective — probe first to let the learner test out."
+                    )
                     if status == "new"
                     else "Objective is below its mastery gate; keep working it until it clears."
                 ),
@@ -434,6 +480,7 @@ def objective_report(
         {
             "question_id": attempt.question_id,
             "is_correct": attempt.is_correct,
+            "independent": attempt.independent,
             "answer": str(attempt.user_answer or ""),
             "error_type": attempt.error_type.value if attempt.error_type else "",
             "at": attempt.timestamp,
@@ -469,6 +516,9 @@ def objective_report(
         "correct_count": sum(1 for attempt in attempts if attempt["is_correct"]),
         # The learner's own words, kept as the evidence behind a qualitative pass.
         "explanation": progress.feynman_explanations.get(kp_id, ""),
+        "explained": progress.explained_objectives.get(kp_id),
+        "required_visual_tasks": kp.required_visual_tasks,
+        "demonstrated_visual_tasks": visual_achievements(progress, kp_id),
         "review": _review_report(progress, kp_id, state, due_at, now=moment),
         "errors": [
             {

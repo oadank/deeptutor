@@ -58,8 +58,12 @@ def _normalize_language(value: Any) -> str | None:
         return "zh"
     if language == "french" or base == "fr":
         return "fr"
+    if language in {"german", "deutsch"} or base == "de":
+        return "de"
     if language == "ukrainian" or base in {"uk", "ua"}:
         return "uk"
+    if language in {"polish", "polski"} or base == "pl":
+        return "pl"
     return None
 
 

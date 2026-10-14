@@ -5,6 +5,7 @@ import {
   HeartHandshake,
   House,
   LayoutGrid,
+  ListTodo,
   PenLine,
   Settings,
   type LucideIcon,
@@ -20,6 +21,11 @@ export interface NavEntry {
   defaultCollapsed?: boolean
   /** Model capability this feature needs; locked when the user lacks it. */
   requires?: Capability
+  /**
+   * Learning-account surfaces that may see this entry. Absent means the
+   * entry is hidden whenever a learning policy is in effect (#1222).
+   */
+  surfaces?: readonly string[]
 }
 
 /**
@@ -32,7 +38,14 @@ export interface NavEntry {
  * the neighbour it follows below rather than at the bottom of their list.
  */
 export const PRIMARY_NAV: NavEntry[] = [
-  { href: '/chat', label: 'Home', icon: House, tooltipKey: 'Home tooltip', requires: 'llm' },
+  {
+    href: '/chat',
+    label: 'Home',
+    icon: House,
+    tooltipKey: 'Home tooltip',
+    requires: 'llm',
+    surfaces: ['chat'],
+  },
   {
     href: '/partners',
     label: 'Partners',
@@ -45,8 +58,16 @@ export const PRIMARY_NAV: NavEntry[] = [
     label: 'Personalized Learning',
     icon: GraduationCap,
     tooltipKey: 'One tutor, your own way to learn.',
+    surfaces: ['reading', 'chat', 'books'],
   },
   { href: '/space', label: 'Learning Space', icon: LayoutGrid, tooltipKey: 'Space tooltip' },
+  {
+    href: '/kanban',
+    label: 'Task Board',
+    icon: ListTodo,
+    tooltipKey: 'kanban.intro',
+    surfaces: ['chat'],
+  },
   {
     href: '/co-writer',
     label: 'Co-Writer',
@@ -78,4 +99,20 @@ export const NAV_BY_HREF = new Map(
 
 export function isNavActive(pathname: string, href: string) {
   return pathname === href || pathname.startsWith(`${href}/`)
+}
+
+/**
+ * A learning policy hides every feature the account cannot call. Settings
+ * stays, because the redacted page (theme, language) is still theirs.
+ * ``allowedSurfaces === null`` means no policy: the full sidebar.
+ */
+export function navVisibleUnderPolicy(
+  href: string,
+  allowedSurfaces: readonly string[] | null,
+): boolean {
+  if (allowedSurfaces === null) return true
+  if (href === '/settings') return true
+  const surfaces = NAV_BY_HREF.get(href)?.surfaces
+  if (!surfaces?.length) return false
+  return surfaces.some(surface => allowedSurfaces.includes(surface))
 }

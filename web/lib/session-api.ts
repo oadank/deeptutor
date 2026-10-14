@@ -32,12 +32,23 @@ export interface SessionMessage {
     title?: string;
     caption?: string;
   }>;
-  metadata?: Record<string, unknown>;
+  metadata?: Record<string, unknown> & {
+    orphaned_failed_turn?: OrphanedFailedTurn;
+  };
   trace?: MessageTraceMetadata;
   created_at: number;
   /** Edit-branching: id of the message this row continues. `null` for the
    *  first message in a session. Siblings share the same parent. */
   parent_message_id?: number | null;
+}
+
+/** A persisted failed turn with a saved user row but no assistant reply. */
+export interface OrphanedFailedTurn {
+  turn_id: string;
+  error: string;
+  failure_code: string;
+  retryable: boolean;
+  finished_at: number;
 }
 
 export interface MessageTraceMetadata {
@@ -242,17 +253,48 @@ export async function searchSessions(
   limit = 50,
   offset = 0,
   signal?: AbortSignal,
+  options?: { allWorkspaces?: boolean },
 ): Promise<SessionSearchPage> {
   const qs = new URLSearchParams({
     q: query,
     limit: String(limit),
     offset: String(offset),
   });
+  if (options?.allWorkspaces) qs.set("all_workspaces", "true");
   const response = await apiFetch(apiUrl(`/api/sessions/search?${qs}`), {
     cache: "no-store",
     signal,
   });
   return expectJson<SessionSearchPage>(response);
+}
+
+/** Fetch every full-text search hit in bounded pages for the history console. */
+export async function searchAllSessions(
+  query: string,
+  signal?: AbortSignal,
+  options?: { allWorkspaces?: boolean },
+): Promise<SessionSearchResult[]> {
+  const pageSize = 100;
+  const sessions: SessionSearchResult[] = [];
+  const seen = new Set<string>();
+  for (let offset = 0; ; offset += pageSize) {
+    const page = await searchSessions(
+      query,
+      pageSize,
+      offset,
+      signal,
+      options,
+    );
+    for (const session of page.sessions) {
+      const key = `${sessionWorkspaceId(session)}:${session.session_id}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      sessions.push(session);
+    }
+    if (sessions.length >= page.total || page.sessions.length < pageSize) {
+      return sessions;
+    }
+  }
 }
 
 export async function getSession(
@@ -264,6 +306,11 @@ export async function getSession(
     signal,
   });
   return expectJson<SessionDetail>(response);
+}
+
+/** Opening an old Watching conversation is the explicit migration boundary. */
+export async function migrateWatchingSession(sessionId: string): Promise<SessionDetail> {
+  return expectJson<SessionDetail>(await apiFetch(apiUrl(`/api/sessions/${encodeURIComponent(sessionId)}/migrate-watching`), { method: "POST" }));
 }
 
 /**

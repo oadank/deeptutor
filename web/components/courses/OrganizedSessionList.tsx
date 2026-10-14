@@ -1,5 +1,6 @@
 "use client";
 
+import Tooltip from "@/shared/ui/Tooltip";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -12,6 +13,7 @@ import {
   FolderOpen,
   GraduationCap,
   MoreHorizontal,
+  Unlink,
   Pencil,
   Pin,
   PinOff,
@@ -25,6 +27,9 @@ import {
   sessionKindOf,
   SessionAvatar,
 } from "@/components/sidebar/SessionAvatar";
+import { useTaskBoard } from "@/lib/task-board-store";
+import { sessionTaskLinks, setTaskStatusLink } from "@/lib/task-board-api";
+import { notify } from "@/lib/notifications";
 import { useUnreadSessions } from "@/lib/session-unread";
 import type { StudyCourse } from "@/lib/courses-api";
 import type { ChatWorkspaceRegistration } from "@/lib/workspaces-api";
@@ -125,6 +130,7 @@ export default function OrganizedSessionList({
   // Reads the set; `SessionList` owns keeping it current.
   const unread = useUnreadSessions();
   const { t } = useTranslation();
+  const { board: taskBoard } = useTaskBoard();
   // Backend writes the English sentinel "New conversation" until the LLM
   // title lands; mirror SessionList by showing a localized, breathing label.
   const placeholderLabel = t("New chat");
@@ -299,6 +305,9 @@ export default function OrganizedSessionList({
     const menuOpen = openMenuId === session.session_id;
     const archived = Boolean(session.preferences?.archived);
     const pinned = Boolean(session.preferences?.pinned);
+    const taskLinks = sessionTaskLinks(
+      taskBoard, session.session_id, sessionWorkspaceId(session),
+    );
 
     return (
       <div key={session.session_id} className="relative">
@@ -344,6 +353,7 @@ export default function OrganizedSessionList({
           ) : null}
           <SessionAvatar
             sessionId={session.session_id}
+            workspaceId={sessionWorkspaceId(session)}
             mark={deriveSessionMark(session, liveSessionIds, unread)}
             kind={sessionKindOf(session)}
             size={child ? 11 : 12}
@@ -370,20 +380,20 @@ export default function OrganizedSessionList({
               }}
               className="min-w-0 flex-1 rounded border border-[var(--border)] bg-[var(--background)] px-1.5 py-0.5 text-[12px] outline-none focus:border-[var(--ring)]"
             />
-          ) : isPlaceholderSessionTitle(session.title) ? (
-            <span
-              className="dt-breathing-text min-w-0 flex-1 truncate text-[12.5px] italic text-[var(--foreground)]"
-              title={placeholderLabel}
-            >
-              {displaySessionTitle(session.title, placeholderLabel)}
-            </span>
           ) : (
-            <span
-              className="min-w-0 flex-1 truncate text-[12.5px]"
-              title={session.title}
+            <Tooltip
+              label={`${t("Conversation")}: ${isPlaceholderSessionTitle(session.title) ? placeholderLabel : session.title}`}
+              side="top"
+              className="min-w-0 flex-1"
             >
-              {displaySessionTitle(session.title, placeholderLabel)}
-            </span>
+              <span
+                className={isPlaceholderSessionTitle(session.title)
+                  ? "dt-breathing-text min-w-0 flex-1 truncate text-[12.5px] italic text-[var(--foreground)]"
+                  : "min-w-0 flex-1 truncate text-[12.5px]"}
+              >
+                {displaySessionTitle(session.title, placeholderLabel)}
+              </span>
+            </Tooltip>
           )}
           {pinned ? <Pin size={10} className="shrink-0 opacity-55" /> : null}
           {children.length > 0 && !expanded ? (
@@ -469,6 +479,21 @@ export default function OrganizedSessionList({
                     setMenuPosition(null);
                   }}
                 />
+                {taskLinks?.task_ids.length ? (
+                  <MenuButton
+                    icon={Unlink}
+                    label={t(taskLinks.status_link_enabled ? "tasks.unlinkStatus" : "tasks.linkStatus")}
+                    onClick={() => {
+                      void setTaskStatusLink(
+                        session.session_id,
+                        sessionWorkspaceId(session),
+                        !taskLinks.status_link_enabled,
+                      ).catch(() => notify(t("tasks.saveError"), { tone: "error" }));
+                      setOpenMenuId(null);
+                      setMenuPosition(null);
+                    }}
+                  />
+                ) : null}
                 {courses.length > 0 ? (
                   <>
                     <div className="my-1 border-t border-[var(--border)]/70" />

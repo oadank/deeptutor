@@ -3,7 +3,7 @@
 import { scopedUrl } from "@/lib/workspace-scope";
 import { READING_HOME, readingFolderRoute, readingSessionIdFromPath } from "@/lib/learning-routes";
 
-import { browserStorage } from "@/shared/storage";
+import Tooltip from "@/shared/ui/Tooltip";
 
 import Link from "next/link";
 import dynamic from "next/dynamic";
@@ -19,6 +19,7 @@ import {
   Expand,
   GraduationCap,
   Loader2,
+  Maximize2,
   Minimize2,
   NotebookPen,
   PanelLeftClose,
@@ -67,18 +68,13 @@ import {
   type ReadingLibraryMaterial,
 } from "@/lib/reading-workspace-api";
 import { SourceNavigator } from "./SourceNavigator";
+import { ReadingPanelSeparator } from "./ReadingPanelSeparator";
+import { useReadingPanelLayout } from "./useReadingPanelLayout";
 import {
   EmptyWorkspace,
   MaterialFailure,
   MaterialProcessing,
 } from "./WorkspaceChrome";
-import {
-  ConversationLinkDialog,
-  NotebookCaptureDialog,
-  OrganizedNotesDialog,
-  WorkspaceConfirmDialog,
-  WorkspaceValueDialog,
-} from "./dialogs";
 import { ReadingCompanion } from "./ReadingCompanion";
 import { PageToolButtons, ReadAloudButton } from "./ReadAloudButton";
 import {
@@ -88,6 +84,28 @@ import {
 import { WorkspaceMenu, useWorkspaceMenuHost } from "./WorkspaceMenu";
 import { useReadingWorkspace } from "./useReadingWorkspace";
 import { useReadingLearningMode } from "./useLearningMode";
+
+// Dialogs are only needed after an explicit workspace action.
+const ConversationLinkDialog = dynamic(
+  () => import("./dialogs").then((module) => module.ConversationLinkDialog),
+  { ssr: false },
+);
+const NotebookCaptureDialog = dynamic(
+  () => import("./dialogs").then((module) => module.NotebookCaptureDialog),
+  { ssr: false },
+);
+const OrganizedNotesDialog = dynamic(
+  () => import("./dialogs").then((module) => module.OrganizedNotesDialog),
+  { ssr: false },
+);
+const WorkspaceConfirmDialog = dynamic(
+  () => import("./dialogs").then((module) => module.WorkspaceConfirmDialog),
+  { ssr: false },
+);
+const WorkspaceValueDialog = dynamic(
+  () => import("./dialogs").then((module) => module.WorkspaceValueDialog),
+  { ssr: false },
+);
 
 const MediaReadingStage = dynamic(
   () => import("./MediaReadingStage").then((module) => module.MediaReadingStage),
@@ -177,25 +195,6 @@ export function ReadingWorkspacePage() {
     locator: number;
   } | null>(null);
   const prefillInputRef = useRef<((text: string) => void) | null>(null);
-  // Persisted so a reader who likes a wider (or narrower) companion does not
-  // have to redo it every session; the default mirrors the fixed width the
-  // panel used before it became resizable. Lazy-initialized (not an effect)
-  // because it never reaches server-rendered markup — `gridStyle` below stays
-  // `undefined` until `isDesktopWide` flips true on the client — so there is
-  // no hydration mismatch to guard against.
-  const [companionWidth, setCompanionWidth] = useState(() => {
-    if (typeof window === "undefined") return 380;
-    try {
-      const stored = Number(
-        browserStorage.readRaw("local", "dt.reader.companionWidth"),
-      );
-      return Number.isFinite(stored) && stored >= 300 && stored <= 640
-        ? stored
-        : 380;
-    } catch {
-      return 380;
-    }
-  });
   const [isDesktopWide, setIsDesktopWide] = useState(false);
 
   // A Course Study hand-off may have written the opening line before sending
@@ -259,11 +258,25 @@ export function ReadingWorkspacePage() {
     companionOpen,
     learning,
     mainRef,
-    navigatorOpen,
+    navigatorOpen: preferredNavigatorOpen,
     openLearning,
-    setCompanionOpen,
+    setCompanionOpen: setPreferredCompanionOpen,
     setNavigatorOpen,
   } = useReadingLearningMode(workspaceId);
+  const { gridRef, ...panels } = useReadingPanelLayout({
+    enabled: isDesktopWide,
+    navigatorOpen: preferredNavigatorOpen,
+    companionOpen,
+  });
+  const { navigatorOpen, exitFocus } = panels;
+  const setCompanionOpen = useCallback(
+    (open: boolean) => {
+      if (!open) exitFocus();
+      setPreferredCompanionOpen(open);
+    },
+    [exitFocus, setPreferredCompanionOpen],
+  );
+
   const [documentJump, setDocumentJump] = useState<JumpRequest | null>(null);
   const [pageHeadings, setPageHeadings] = useState<ReaderHeading[]>([]);
   const [activeHeadingId, setActiveHeadingId] = useState<string | null>(null);
@@ -292,12 +305,13 @@ export function ReadingWorkspacePage() {
   // sheets over the document, and two sheets at once is just a mess.
   const toggleNavigator = useCallback(
     (open: boolean) => {
+      exitFocus();
       if (open && !window.matchMedia("(min-width: 1024px)").matches) {
         setCompanionOpen(false);
       }
       setNavigatorOpen(open);
     },
-    [setCompanionOpen, setNavigatorOpen],
+    [exitFocus, setCompanionOpen, setNavigatorOpen],
   );
   const toggleCompanion = useCallback(
     (open: boolean) => {
@@ -379,39 +393,6 @@ export function ReadingWorkspacePage() {
     toggleCompanion,
   ]);
 
-  const startCompanionResize = useCallback(
-    (event: React.PointerEvent<HTMLDivElement>) => {
-      event.preventDefault();
-      const startX = event.clientX;
-      const startWidth = companionWidth;
-      const reserved = navigatorOpen ? 650 : 420;
-      const max = Math.max(300, Math.min(640, window.innerWidth - reserved));
-      const onMove = (moveEvent: PointerEvent) => {
-        const next = startWidth + (startX - moveEvent.clientX);
-        setCompanionWidth(Math.min(max, Math.max(300, Math.round(next))));
-      };
-      const onUp = () => {
-        window.removeEventListener("pointermove", onMove);
-        window.removeEventListener("pointerup", onUp);
-        setCompanionWidth((current) => {
-          try {
-            browserStorage.writeRaw(
-              "local",
-              "dt.reader.companionWidth",
-              String(current),
-            );
-          } catch {
-            // A blocked or private store just resets to default next time.
-          }
-          return current;
-        });
-      };
-      window.addEventListener("pointermove", onMove);
-      window.addEventListener("pointerup", onUp);
-    },
-    [companionWidth, navigatorOpen],
-  );
-
   if (loading) {
     return (
       <div className="flex h-full items-center justify-center gap-2 bg-[var(--background)] text-[12px] text-[var(--muted-foreground)] dark:bg-[var(--background)]">
@@ -451,19 +432,6 @@ export function ReadingWorkspacePage() {
     activeTab?.material.render_mode === "video" ||
     activeTab?.material.render_mode === "audio";
 
-  // At desktop width the companion column is drag-resizable, so its track is
-  // driven by JS state rather than the Tailwind classes below — a narrow
-  // hairline "handle" track sits between the reader and the companion only
-  // in this case. The navigator has no grid track when it is closed.
-  const showResizeHandle = isDesktopWide && companionOpen;
-  const gridStyle: React.CSSProperties | undefined = showResizeHandle
-    ? {
-        gridTemplateColumns: navigatorOpen
-          ? `minmax(184px,230px) minmax(360px,1fr) 5px ${companionWidth}px`
-          : `minmax(360px,1fr) 5px ${companionWidth}px`,
-      }
-    : undefined;
-
   // Panels below their docking width are sheets over the document, and a
   // sheet needs a scrim to close it by. The navigator docks at `lg`, the
   // companion at `xl`; the scrim used to key on either one being open with a
@@ -498,39 +466,44 @@ export function ReadingWorkspacePage() {
         {/* The outline opens on the left, so its switch lives on the left:
             it sat at the far right, next to the companion's, and a learner
             had to guess which of two panel icons was which. */}
-        <button
-          type="button"
-          onClick={() => toggleNavigator(!navigatorOpen)}
-          className={`flex size-7 shrink-0 items-center justify-center rounded-md transition hover:bg-[var(--muted)] ${
-            navigatorOpen
-              ? "text-[var(--primary)]"
-              : "text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
-          }`}
-          aria-label={
-            navigatorOpen ? t("Collapse contents") : t("Expand contents")
-          }
-          title={navigatorOpen ? t("Collapse contents") : t("Expand contents")}
-          aria-expanded={navigatorOpen}
-        >
-          {navigatorOpen ? <PanelLeftClose size={14} /> : <PanelLeftOpen size={14} />}
-        </button>
-        <button
-          type="button"
-          onClick={() => setShowRename(true)}
-          className="max-w-[240px] shrink-0 truncate font-serif text-[13.5px] font-semibold tracking-[-0.01em] transition hover:text-[var(--primary)]"
-          title={t("Rename collection")}
-        >
-          {workspace.title}
-        </button>
-        <button
-          type="button"
-          onClick={() => setShowAddSource(true)}
-          className="flex size-7 shrink-0 items-center justify-center rounded-md text-[var(--muted-foreground)] transition hover:bg-[var(--muted)] hover:text-[var(--primary)]"
-          aria-label={t("Add material")}
-          title={t("Add material")}
-        >
-          <Plus size={14} />
-        </button>
+        <Tooltip label={navigatorOpen ? t("Collapse contents") : t("Expand contents")}>
+          <button
+            type="button"
+            onClick={() => toggleNavigator(!navigatorOpen)}
+            className={`flex size-7 shrink-0 items-center justify-center rounded-md transition hover:bg-[var(--muted)] ${
+              navigatorOpen
+                ? "text-[var(--primary)]"
+                : "text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
+            }`}
+            aria-label={
+              navigatorOpen ? t("Collapse contents") : t("Expand contents")
+            }
+            aria-expanded={navigatorOpen}
+          >
+            {navigatorOpen ? <PanelLeftClose size={14} /> : <PanelLeftOpen size={14} />}
+          </button>
+        </Tooltip>
+        <span className="inline-flex min-w-0 max-w-[240px] shrink-0">
+          <Tooltip label={t("Rename collection")} suppressed={showRename}>
+            <button
+              type="button"
+              onClick={() => setShowRename(true)}
+              className="min-w-0 max-w-[240px] truncate font-serif text-[13.5px] font-semibold tracking-[-0.01em] transition hover:text-[var(--primary)]"
+            >
+              {workspace.title}
+            </button>
+          </Tooltip>
+        </span>
+        <Tooltip label={t("Add material")}>
+          <button
+            type="button"
+            onClick={() => setShowAddSource(true)}
+            className="flex size-7 shrink-0 items-center justify-center rounded-md text-[var(--muted-foreground)] transition hover:bg-[var(--muted)] hover:text-[var(--primary)]"
+            aria-label={t("Add material")}
+          >
+            <Plus size={14} />
+          </button>
+        </Tooltip>
 
         <div className="ml-auto flex shrink-0 items-center gap-0.5">
           {notice && (
@@ -545,24 +518,23 @@ export function ReadingWorkspacePage() {
           />
           {/* An icon, like every other control on this bar: as the only
               labelled button it read as the page's primary action. */}
-          <button
-            type="button"
-            onClick={() => (learning ? closeLearning() : openLearning())}
-            className={`flex size-7 shrink-0 items-center justify-center rounded-md transition hover:bg-[var(--muted)] ${
-              learning
-                ? "text-[var(--primary)]"
-                : "text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
-            }`}
-            aria-pressed={learning}
-            aria-label={t(
-              learning ? "Exit learning mode" : "Fullscreen learning",
-            )}
-            title={t(
-              learning ? "Exit learning mode" : "Fullscreen learning",
-            )}
-          >
-            {learning ? <Minimize2 size={14} /> : <Expand size={14} />}
-          </button>
+          <Tooltip label={t(learning ? "Exit learning mode" : "Fullscreen learning")}>
+            <button
+              type="button"
+              onClick={() => (learning ? closeLearning() : openLearning())}
+              className={`flex size-7 shrink-0 items-center justify-center rounded-md transition hover:bg-[var(--muted)] ${
+                learning
+                  ? "text-[var(--primary)]"
+                  : "text-[var(--muted-foreground)] hover:text-[var(--foreground)]"
+              }`}
+              aria-pressed={learning}
+              aria-label={t(
+                learning ? "Exit learning mode" : "Fullscreen learning",
+              )}
+            >
+              {learning ? <Minimize2 size={14} /> : <Expand size={14} />}
+            </button>
+          </Tooltip>
           <WorkspaceMenu
             sections={menuSections}
             collection={collectionMenu}
@@ -570,16 +542,17 @@ export function ReadingWorkspacePage() {
           {/* Past conversations are in the app sidebar with every other one;
               this bar only starts a fresh one. Beside the companion's switch,
               since that is the column it clears. */}
-          <button
-            type="button"
-            onClick={newConversation}
-            disabled={!activeConversation}
-            className="flex size-7 shrink-0 items-center justify-center rounded-md text-[var(--muted-foreground)] transition hover:bg-[var(--muted)] hover:text-[var(--foreground)] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
-            aria-label={t("New conversation")}
-            title={t("New conversation")}
-          >
-            <SquarePen size={14} />
-          </button>
+          <Tooltip label={t("New conversation")}>
+            <button
+              type="button"
+              onClick={newConversation}
+              disabled={!activeConversation}
+              className="flex size-7 shrink-0 items-center justify-center rounded-md text-[var(--muted-foreground)] transition hover:bg-[var(--muted)] hover:text-[var(--foreground)] disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent"
+              aria-label={t("New conversation")}
+            >
+              <SquarePen size={14} />
+            </button>
+          </Tooltip>
           <button
             type="button"
             onClick={() => toggleCompanion(!companionOpen)}
@@ -597,10 +570,32 @@ export function ReadingWorkspacePage() {
               <PanelRightOpen size={14} />
             )}
           </button>
+          {isDesktopWide && companionOpen && (
+            <Tooltip
+              label={
+                panels.companionFocus ? t("Exit companion focus") : t("Focus reading companion")
+              }
+            >
+              <button
+                type="button"
+                onClick={panels.toggleFocus}
+                className="flex size-7 items-center justify-center rounded-md text-[var(--muted-foreground)] transition hover:bg-[var(--muted)] hover:text-[var(--primary)]"
+                aria-label={
+                  panels.companionFocus
+                    ? t("Exit companion focus")
+                    : t("Focus reading companion")
+                }
+                aria-pressed={panels.companionFocus}
+              >
+                {panels.companionFocus ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+              </button>
+            </Tooltip>
+          )}
         </div>
       </header>
 
       <div
+        ref={gridRef}
         className={`relative grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)] overflow-hidden ${
           companionOpen
             ? navigatorOpen
@@ -610,7 +605,7 @@ export function ReadingWorkspacePage() {
               ? "grid-cols-[minmax(0,1fr)] lg:grid-cols-[minmax(184px,230px)_minmax(0,1fr)]"
               : "grid-cols-[minmax(0,1fr)]"
         }`}
-        style={gridStyle}
+        style={panels.gridStyle}
       >
         {scrimClass && (
           <button
@@ -680,6 +675,17 @@ export function ReadingWorkspacePage() {
           }}
         />
 
+        {panels.showNavigatorHandle && (
+          <ReadingPanelSeparator
+            label={t("Resize contents navigator")}
+            width={panels.navigatorWidth}
+            min={panels.navigatorMin}
+            max={panels.navigatorMax}
+            direction={1}
+            onResize={panels.resizeNavigator}
+          />
+        )}
+
         <section className="relative min-h-0 min-w-0 overflow-hidden border-r border-[var(--border)] bg-[var(--secondary)] dark:border-[var(--border)] dark:bg-[var(--secondary)]">
           {!activeTab ? (
             <EmptyWorkspace onAdd={() => setShowAddSource(true)} />
@@ -734,16 +740,15 @@ export function ReadingWorkspacePage() {
 
         </section>
 
-        {showResizeHandle && (
-          <div
-            role="separator"
-            aria-orientation="vertical"
-            aria-label={t("Resize reading companion")}
-            onPointerDown={startCompanionResize}
-            className="group/resize relative z-10 hidden cursor-col-resize xl:block"
-          >
-            <span className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-[var(--border)] transition-colors group-hover/resize:bg-[var(--primary)] group-active/resize:bg-[var(--primary)]" />
-          </div>
+        {panels.showCompanionHandle && (
+          <ReadingPanelSeparator
+            label={t("Resize reading companion")}
+            width={panels.companionWidth}
+            min={panels.companionMin}
+            max={panels.companionMax}
+            direction={-1}
+            onResize={panels.resizeCompanion}
+          />
         )}
 
         {companionOpen && (

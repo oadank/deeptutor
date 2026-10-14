@@ -7,7 +7,10 @@ from collections.abc import Awaitable, Callable, Iterable, Mapping
 import hashlib
 from importlib.metadata import PackageNotFoundError, version
 import inspect
+import json
+import logging
 from pathlib import Path
+import re
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -29,6 +32,8 @@ from .worker import OwnerLoopBridge
 LIGHTRAG_DISTRIBUTION = "lightrag-hku"
 LIGHTRAG_VERSION = "1.5.7"
 PARSER_ENGINE = "deeptutor"
+
+logger = logging.getLogger(__name__)
 
 
 class LightRagContractError(RuntimeError):
@@ -181,7 +186,31 @@ def _register_parser() -> None:
 
 
 def workspace_for(working_dir: Path) -> str:
-    identity = str(Path(working_dir).resolve()).encode("utf-8")
+    root = Path(working_dir)
+    # A published version keeps its native LightRAG workspace name when its
+    # containing KB is moved. The name is a hash of the original absolute
+    # version path; recomputing it after a move would open an empty store.
+    meta_path = root / "meta.json"
+    try:
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        published = str(meta.get("workspace") or "") if isinstance(meta, dict) else ""
+        if (
+            isinstance(meta, dict)
+            and meta.get("provider") == "lightrag"
+            and re.fullmatch(r"deeptutor_[0-9a-f]{16}", published)
+        ):
+            return published
+    except FileNotFoundError:
+        pass
+    except (OSError, ValueError) as exc:
+        logger.warning(
+            "LightRAG workspace meta at %s exists but cannot be used (%s: %s); "
+            "falling back to path-hash workspace name, which may open an empty store",
+            meta_path,
+            type(exc).__name__,
+            exc,
+        )
+    identity = str(root.resolve()).encode("utf-8")
     return f"deeptutor_{hashlib.sha256(identity).hexdigest()[:16]}"
 
 

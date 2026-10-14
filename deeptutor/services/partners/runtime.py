@@ -53,6 +53,7 @@ from deeptutor.services.partners.scope import partner_scope
 from deeptutor.services.partners.sessions import PartnerSessionStore, conversation_scope
 from deeptutor.services.partners.workspace import ensure_partner_workspace, read_soul
 from deeptutor.services.partners.workspace_binding import partner_content_context
+from deeptutor.services.session.artifact_attachments import artifact_attachments
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +63,11 @@ ChannelActivityCallback = Callable[[InboundMessage, dict[str, Any]], Awaitable[N
 _MAX_IMAGE_BYTES = 8 * 1024 * 1024
 _MAX_MEDIA_BYTES = 10 * 1024 * 1024
 _TOOL_HINT_MAX_CHARS = 120
+
+# Channels that post the "thinking…" notice and retract it when the answer
+# starts arriving. Opt-in: a channel that cannot retract would leave it behind.
+_THINKING_NOTICE_CHANNELS = frozenset({"feishu"})
+_THINKING_NOTICES = {"zh": "🤔 正在思考…", "en": "🤔 Thinking…"}
 
 
 @dataclass(frozen=True, slots=True)
@@ -322,7 +328,7 @@ class PartnerRunner:
                         delivery_meta.update(command.metadata)
                     return command.content
 
-            final, turn_events = await self._run_turn(
+            final, turn_events, generated_attachments = await self._run_turn(
                 msg,
                 store=store,
                 on_event=on_event,
@@ -365,6 +371,7 @@ class PartnerRunner:
                         }
                         or None,
                         events=turn_events or None,
+                        attachments=generated_attachments or None,
                     )
             return final
 
@@ -376,12 +383,12 @@ class PartnerRunner:
         on_event: EventCallback | None = None,
         delivery_meta: dict[str, Any] | None = None,
         options: PartnerTurnOptions | None = None,
-    ) -> tuple[str, list[dict[str, Any]]]:
+    ) -> tuple[str, list[dict[str, Any]], list[dict[str, Any]]]:
         ensure_partner_workspace(self.partner_id)
         primary = getattr(self.config, "llm_selection", None) or None
         backup = getattr(self.config, "backup_llm_selection", None) or None
 
-        final_text, errors, events = await self._execute_turn(
+        final_text, errors, events, generated_attachments = await self._execute_turn(
             msg,
             store=store,
             selection=primary,
@@ -397,7 +404,7 @@ class PartnerRunner:
             )
             if delivery_meta is not None:
                 delivery_meta.pop("_streamed", None)
-            final_text, errors, events = await self._execute_turn(
+            final_text, errors, events, generated_attachments = await self._execute_turn(
                 msg,
                 store=store,
                 selection=backup,
@@ -408,7 +415,7 @@ class PartnerRunner:
 
         if not final_text and errors:
             final_text = f"Sorry, the turn failed: {errors[-1]}"
-        return final_text, events
+        return final_text, events, generated_attachments
 
     async def _execute_turn(
         self,
@@ -419,7 +426,7 @@ class PartnerRunner:
         on_event: EventCallback | None = None,
         delivery_meta: dict[str, Any] | None = None,
         options: PartnerTurnOptions | None = None,
-    ) -> tuple[str, list[str], list[dict[str, Any]]]:
+    ) -> tuple[str, list[str], list[dict[str, Any]], list[dict[str, Any]]]:
         """Run one chat turn with *selection* active; returns (final, errors, events).
 
         ``events`` is the turn's trace (every StreamEvent except done/session,
@@ -453,6 +460,8 @@ class PartnerRunner:
         answer_visible_parts: list[str] = []
         errors: list[str] = []
         turn_events: list[dict[str, Any]] = []
+        generated_attachments: list[dict[str, Any]] = []
+        seen_artifact_urls: set[str] = set()
         wants_stream = False
         context: UnifiedContext | None = None
 
@@ -489,6 +498,19 @@ class PartnerRunner:
             wants_stream = is_im and send_progress and bool(msg.metadata.get("_wants_stream"))
 
             _config, llm_token = activate_llm_selection(selection)
+            logger.info(
+                "Partner %s turn %s on %s: live streaming %s",
+                self.partner_id,
+                turn_id or "-",
+                msg.channel,
+                "on" if wants_stream else "off",
+            )
+            # Reasoning tokens are never delivered to channels, so a
+            # thinking-heavy turn looks like a dead bot until the first answer
+            # token. Give the reader a notice they can watch, and let the
+            # channel retract it once the answer starts arriving.
+            if is_im and send_progress and msg.channel in _THINKING_NOTICE_CHANNELS:
+                await self._publish_thinking_notice(msg)
             if options.conversation_history is None:
                 context.runtime.model_history = store.model_history(
                     session_key=msg.session_key,
@@ -529,6 +551,16 @@ class PartnerRunner:
                             StreamEventType.SESSION,
                         ):
                             turn_events.append(event.to_dict())
+
+                        # Persist generated workspace items alongside the
+                        # partner reply.  The Web UI needs their opaque URLs
+                        # to turn a model-written relative Markdown path into
+                        # an actual download action after a refresh.
+                        for attachment in artifact_attachments(event):
+                            url = str(attachment.get("url") or "")
+                            if url and url not in seen_artifact_urls:
+                                seen_artifact_urls.add(url)
+                                generated_attachments.append(attachment)
 
                         if event.type == StreamEventType.CONTENT:
                             call_id = str(meta.get("call_id") or "")
@@ -643,7 +675,7 @@ class PartnerRunner:
                     delivery_meta["_streamed"] = True
                     delivery_meta["_stream_id"] = f"{turn_id}:{call_id}"
 
-        return final_text, errors, turn_events
+        return final_text, errors, turn_events, generated_attachments
 
     # ── context assembly ──────────────────────────────────────────
 
@@ -1078,6 +1110,27 @@ class PartnerRunner:
                 metadata={
                     "_progress": True,
                     "_tool_hint": tool_hint,
+                    **_thread_delivery_meta(msg),
+                },
+            )
+        )
+
+    async def _publish_thinking_notice(self, msg: InboundMessage) -> None:
+        """Post a short "thinking…" placeholder before the first answer token.
+
+        Only channels that can retract it (see ``_THINKING_NOTICE_CHANNELS``)
+        are targeted, so a channel that would leave the notice behind is
+        unaffected.
+        """
+        notice = _THINKING_NOTICES[self._language()]
+        await self.bus.publish_outbound(
+            OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content=notice,
+                metadata={
+                    "_progress": True,
+                    "_thinking_notice": True,
                     **_thread_delivery_meta(msg),
                 },
             )

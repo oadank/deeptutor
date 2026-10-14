@@ -22,6 +22,7 @@ from deeptutor.services.rag.index_versioning import (
     write_version_meta,
 )
 from deeptutor.services.rag.kb_paths import resolve_kb_dir
+from deeptutor.services.rag.visual_assets import VisualAssetStore
 
 from . import storage
 from .config import default_top_k, should_show_progress
@@ -208,12 +209,16 @@ class LlamaIndexPipeline:
         )
 
         signature = self._current_signature()
-        storage_dir = resolve_storage_dir_for_rebuild(kb_dir, signature)
+        storage_dir = resolve_storage_dir_for_rebuild(kb_dir, signature, publication_guard=True)
 
         try:
             await self._verify_embedding_connectivity()
+            visual_candidates = []
             documents = await self.document_loader.load(
-                file_paths, image_progress_callback=image_progress_callback
+                file_paths,
+                image_progress_callback=image_progress_callback,
+                kb_dir=kb_dir,
+                visual_candidates=visual_candidates,
             )
             if not documents:
                 self.logger.error("No valid documents found")
@@ -224,6 +229,10 @@ class LlamaIndexPipeline:
                 f"(chunking + embedding)..."
             )
 
+            # #1802: validate and publish pixels before persisting nodes that
+            # reference them. Failed indexing can leave unused immutable assets;
+            # failed asset publication must not leave a partially accepted index.
+            VisualAssetStore(kb_dir).publish(visual_candidates, prune_missing=True)
             await _run_with_stall_guard(
                 lambda: storage.create_index(
                     documents, storage_dir, show_progress=should_show_progress()
@@ -233,8 +242,7 @@ class LlamaIndexPipeline:
             )
 
             self.logger.info(f"Index persisted to {storage_dir}")
-            if signature is not None:
-                write_version_meta(kb_dir, signature, storage_dir=storage_dir)
+            await self._publish_verified(kb_dir, storage_dir, signature, documents)
 
             indexed_file_callback = kwargs.get("indexed_file_callback")
             if indexed_file_callback is not None:
@@ -267,6 +275,23 @@ class LlamaIndexPipeline:
         **kwargs,
     ) -> Dict[str, Any]:
         kwargs.pop("mode", None)
+        # Numbered exercises require structural lookup: tokenization discards
+        # chapter numbers, while top-k fragments omit tables and continuation.
+        # This uses completed parses only and leaves ordinary semantic queries
+        # on the existing embedding/retrieval path.
+        from .exercise_lookup import lookup_exercises, requested_exercises
+
+        if requested_exercises(query)[0]:
+            kb_dir = resolve_kb_dir(self.kb_base_dir, kb_name)
+            try:
+                exact = await asyncio.to_thread(
+                    lookup_exercises, query, kb_dir, Path(self.kb_base_dir).parent / "parse_cache"
+                )
+            except Exception:
+                self.logger.exception("Exercise lookup unavailable; using normal retrieval")
+            else:
+                if exact is not None:
+                    return exact
         self._configure_settings()
         self.logger.info(f"Searching KB '{kb_name}' with query: {query[:50]}...")
 
@@ -351,6 +376,17 @@ class LlamaIndexPipeline:
                     "page": meta.get("page_label", meta.get("page", "")),
                     "chunk_id": node.node.node_id or str(i),
                     "score": round(node.score, 4) if node.score is not None else "",
+                    **(
+                        {
+                            "visual_asset_id": meta["visual_asset_id"],
+                            "source_document_id": meta.get("source_document_id", ""),
+                            "bbox": meta.get("bbox"),
+                            "caption": meta.get("caption", ""),
+                            "source_locator": meta.get("source_locator", ""),
+                        }
+                        if meta.get("visual_asset_id")
+                        else {}
+                    ),
                 }
             )
 
@@ -378,13 +414,18 @@ class LlamaIndexPipeline:
         try:
             await self._verify_embedding_connectivity()
 
+            visual_candidates = []
             documents = await self.document_loader.load(
-                file_paths, image_progress_callback=image_progress_callback
+                file_paths,
+                image_progress_callback=image_progress_callback,
+                kb_dir=kb_dir,
+                visual_candidates=visual_candidates,
             )
             if not documents:
                 self.logger.warning("No valid documents to add")
                 return False
 
+            VisualAssetStore(kb_dir).publish(visual_candidates)
             if plan.existing_storage is not None:
                 self.logger.info(f"Loading existing index from {plan.existing_storage}...")
                 num_added = await _run_with_stall_guard(
@@ -395,8 +436,7 @@ class LlamaIndexPipeline:
                     worker_key=str(kb_dir.resolve()),
                 )
                 self.logger.info(f"Added {num_added} documents to existing index")
-                if signature is not None and plan.storage_dir != plan.existing_storage:
-                    write_version_meta(kb_dir, signature, storage_dir=plan.storage_dir)
+
             else:
                 self.logger.info(f"Creating new index with {len(documents)} documents...")
                 plan.storage_dir.mkdir(parents=True, exist_ok=True)
@@ -408,9 +448,8 @@ class LlamaIndexPipeline:
                     worker_key=str(kb_dir.resolve()),
                 )
                 self.logger.info(f"Created new index with {num_added} documents")
-                if signature is not None:
-                    write_version_meta(kb_dir, signature, storage_dir=plan.storage_dir)
 
+            await self._publish_verified(kb_dir, plan.storage_dir, signature, documents)
             self.logger.info(f"Successfully added documents to KB '{kb_name}'")
             return True
 
@@ -424,6 +463,35 @@ class LlamaIndexPipeline:
             raise
         finally:
             set_progress_callback(None)
+
+    async def _publish_verified(self, kb_dir, storage_dir, signature, documents):
+        from deeptutor.knowledge.indexing_run import current_run
+        from deeptutor.services.file_io import atomic_write_json
+
+        run = current_run()
+        if run:
+            run.phase("verifying")
+        await asyncio.to_thread(storage.verify_persisted_index, storage_dir)
+        if run:
+            await asyncio.to_thread(run.verify_sources)
+        if signature is not None:
+            write_version_meta(kb_dir, signature, storage_dir=storage_dir)
+        else:
+            atomic_write_json(
+                storage_dir / "meta.json",
+                {
+                    "version": storage_dir.name,
+                    "provider": "llamaindex",
+                    "state": "published",
+                    "readiness_verified": True,
+                },
+            )
+        if run:
+            run.data["usable_version"] = storage_dir.name
+            for document in documents:
+                path = (getattr(document, "metadata", None) or {}).get("file_path")
+                if path:
+                    run.document(Path(path), "completed")
 
     async def delete(self, kb_name: str) -> bool:
         kb_dir = resolve_kb_dir(self.kb_base_dir, kb_name)

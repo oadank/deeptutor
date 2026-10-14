@@ -293,8 +293,8 @@ export async function listKnowledgeBases(options?: {
       const response = await apiFetch(
         apiUrl(
           options?.library
-            ? "/api/knowledge-bases?resource_library=true"
-            : "/api/knowledge-bases",
+            ? "/api/knowledge-bases/list?resource_library=true"
+            : "/api/knowledge-bases/list",
         ),
         {
           cache: "no-store",
@@ -738,6 +738,7 @@ export function knowledgeBaseFilePreviewTextPath(
 }
 
 export interface KnowledgeTaskResponse {
+  id?: string;
   task_id?: string;
   message?: string;
   noop?: boolean;
@@ -770,6 +771,7 @@ export async function createKnowledgeBase(payload: {
   name: string;
   provider: string;
   files: File[];
+  storageWorkspaceId?: string;
   pageindexMode?: "flash" | "standard";
   searchMode?: string;
   embeddingModel?: EmbeddingModelSelection;
@@ -777,6 +779,8 @@ export async function createKnowledgeBase(payload: {
   const form = new FormData();
   form.append("name", payload.name);
   form.append("rag_provider", payload.provider);
+  if (payload.storageWorkspaceId !== undefined)
+    form.append("storage_workspace_id", payload.storageWorkspaceId);
   if (payload.pageindexMode) {
     form.append("pageindex_mode", payload.pageindexMode);
   }
@@ -796,6 +800,82 @@ export async function createKnowledgeBase(payload: {
   }
   invalidateKnowledgeCaches();
   return (await res.json()) as KnowledgeTaskResponse;
+}
+
+export interface KiwixArticle {
+  title: string;
+  article_path: string;
+  excerpt: string;
+}
+
+export interface KiwixArchive {
+  zim_name: string;
+  title: string;
+}
+
+export async function listKiwixArchives(serverUrl: string, query = ""): Promise<KiwixArchive[]> {
+  const path = `/api/knowledge-bases/kiwix-catalog?server_url=${encodeURIComponent(serverUrl)}&q=${encodeURIComponent(query)}`;
+  const res = await apiFetch(apiUrl(path), { cache: "no-store" });
+  if (!res.ok) throw new Error(await readErrorDetail(res, "Could not browse Kiwix archives"));
+  const body = (await res.json()) as { archives: KiwixArchive[] };
+  return body.archives;
+}
+
+export async function probeKiwix(payload: {
+  serverUrl: string;
+  zimName: string;
+}): Promise<{ ok: boolean; title: string; zim_name: string }> {
+  const res = await apiFetch(apiUrl("/api/knowledge-bases/probe-kiwix"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ server_url: payload.serverUrl, zim_name: payload.zimName }),
+  });
+  if (!res.ok) throw new Error(await readErrorDetail(res, "Could not reach Kiwix archive"));
+  return (await res.json()) as { ok: boolean; title: string; zim_name: string };
+}
+
+export async function connectKiwix(payload: {
+  name: string;
+  serverUrl: string;
+  zimName: string;
+}): Promise<void> {
+  const res = await apiFetch(apiUrl("/api/knowledge-bases/connect-kiwix"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      name: payload.name,
+      server_url: payload.serverUrl,
+      zim_name: payload.zimName,
+    }),
+  });
+  if (!res.ok) throw new Error(await readErrorDetail(res, "Could not connect Kiwix archive"));
+  invalidateKnowledgeCaches();
+}
+
+export async function searchKiwixArticles(kbRef: string, query: string): Promise<KiwixArticle[]> {
+  const path = `/api/knowledge-bases/kiwix-articles?kb_ref=${encodeURIComponent(kbRef)}&q=${encodeURIComponent(query)}`;
+  const res = await apiFetch(apiUrl(path), { cache: "no-store" });
+  if (!res.ok) throw new Error(await readErrorDetail(res, "Kiwix search failed"));
+  const body = (await res.json()) as { articles: KiwixArticle[] };
+  return body.articles;
+}
+
+export async function importKiwixArticle(payload: {
+  kbRef: string;
+  articlePath: string;
+  title: string;
+}): Promise<{ workspace: { workspace_id: string } }> {
+  const res = await apiFetch(baseApiUrl("/api/reading/library/import-zim-article"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      kb_ref: payload.kbRef,
+      article_path: payload.articlePath,
+      title: payload.title,
+    }),
+  });
+  if (!res.ok) throw new Error(await readErrorDetail(res, "Could not open Kiwix article"));
+  return (await res.json()) as { workspace: { workspace_id: string } };
 }
 
 export async function connectObsidianVault(payload: {
@@ -1576,6 +1656,18 @@ export async function syncGitHubSources(
 
 // ── Web sources ──────────────────────────────────────────────────────
 
+export interface BilingualPairing {
+  pairing_id: string;
+  source_url: string;
+  target_url: string;
+  source_file: string;
+  target_file: string;
+  source_lang: string;
+  target_lang: string;
+  pairing_method: string;
+  updated_at?: number;
+}
+
 export interface WebSource {
   id: string;
   url: string;
@@ -1589,6 +1681,7 @@ export interface WebSource {
   last_sync_status: string;
   last_sync_error: string | null;
   added_at: string;
+  bilingual_pairings?: BilingualPairing[];
 }
 
 export interface AddWebSourcePayload {
@@ -1646,6 +1739,28 @@ export async function listWebSources(
     );
   }
   return (await res.json()) as WebSource[];
+}
+
+export async function listWebSourcePairings(
+  kbName: string,
+  sourceId: string,
+  options?: { signal?: AbortSignal },
+): Promise<BilingualPairing[]> {
+  const res = await apiFetch(
+    apiUrl(
+      `/api/knowledge-bases/${encodeURIComponent(kbName)}/web-source/${encodeURIComponent(sourceId)}/pairings`,
+    ),
+    { signal: options?.signal },
+  );
+  if (!res.ok) {
+    throw new Error(
+      await readErrorDetail(
+        res,
+        `Failed to list web source pairings (${res.status})`,
+      ),
+    );
+  }
+  return (await res.json()) as BilingualPairing[];
 }
 
 export async function addWebSource(

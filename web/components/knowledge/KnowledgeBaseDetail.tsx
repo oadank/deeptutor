@@ -1,5 +1,6 @@
 "use client";
 
+import Tooltip from "@/shared/ui/Tooltip";
 import { knowledgeBaseRef } from "@/lib/knowledge-helpers";
 import type { EmbeddingModelSelection } from "@/features/knowledge/model/types";
 
@@ -41,6 +42,7 @@ import type { TaskState } from "@/hooks/useKnowledgeProgress";
 import type { HistoryEntry } from "@/hooks/useKnowledgeHistory";
 import KbStatusBadge from "./KbStatusBadge";
 import KbTaskLogs from "./KbTaskLogs";
+import KbIndexingRun from "./KbIndexingRun";
 import KbFilesTab from "./KbFilesTab";
 import KbDocumentsSection from "./KbDocumentsSection";
 import KbIndexVersionsSection from "./KbIndexVersionsSection";
@@ -49,6 +51,7 @@ import KbGitHubSourcesSection from "./KbGitHubSourcesSection";
 import KbLinkedFoldersSection from "./KbLinkedFoldersSection";
 import KbWebSourcesSection from "./KbWebSourcesSection";
 import KbMarginNoteDevicesSection from "./KbMarginNoteDevicesSection";
+import KbKiwixArticlesSection from "./KbKiwixArticlesSection";
 import KnowledgeEngineIcon, {
   knowledgeSourceIconId,
 } from "./KnowledgeEngineIcon";
@@ -81,6 +84,7 @@ interface KnowledgeBaseDetailProps {
   onRetry: (kbName: string) => Promise<void>;
   onSetDefault: (kbName: string) => Promise<void>;
   onDelete: (kbName: string) => Promise<void>;
+  onMove?: (kbName: string, targetWorkspaceId: string) => Promise<void>;
   onClearHistory: (kbName: string) => void;
   onBack?: () => void;
 }
@@ -96,6 +100,7 @@ const SECTION_CHROME: Record<
   web: { label: "Web", Icon: Globe },
   versions: { label: "Index versions", Icon: Layers },
   devices: { label: "Devices", Icon: Smartphone },
+  kiwix: { label: "Articles", Icon: FileText },
   settings: { label: "Settings", Icon: SettingsIcon },
 };
 
@@ -116,6 +121,7 @@ export default function KnowledgeBaseDetail({
   onRetry,
   onSetDefault,
   onDelete,
+  onMove,
   onClearHistory,
   onBack,
 }: KnowledgeBaseDetailProps) {
@@ -154,11 +160,13 @@ export default function KnowledgeBaseDetail({
   const isMarginNote = isMarginNoteKb(kb);
   // A MarginNote library records no engine and no embedding: defaulting to
   // "llamaindex · Default embedding" here described a pipeline it never runs.
-  const provider = isMarginNote
+  const provider = kb.metadata?.type === "kiwix"
+    ? t("Kiwix / ZIM")
+    : isMarginNote
     ? t("MarginNote 4")
     : kb.statistics?.rag_provider || "llamaindex";
   const pageIndexProvider =
-    isMarginNote || !providerUsesEmbeddingMetadata(provider);
+    isMarginNote || kb.metadata?.type === "kiwix" || !providerUsesEmbeddingMetadata(provider);
   const embeddingLabel = meta.embedding_model
     ? typeof meta.embedding_dim === "number"
       ? `${meta.embedding_model} · ${meta.embedding_dim}${t("d")}`
@@ -173,7 +181,7 @@ export default function KnowledgeBaseDetail({
     task.executing === true;
   const status = resolveKbStatus(kb);
   // Nothing to re-run: its content arrives from the add-on, not an index.
-  const canRetry = status === "error" && !kb.read_only && !isMarginNote;
+  const canRetry = status === "error" && !kb.read_only && !isMarginNote && kb.metadata?.type !== "kiwix";
 
   const handleRetry = async () => {
     if (!canRetry || retrySubmitting || isReindexingLocally) return;
@@ -252,28 +260,29 @@ export default function KnowledgeBaseDetail({
             </div>
           </div>
           {canRetry && (
-            <button
-              type="button"
-              onClick={handleRetry}
-              disabled={retrySubmitting || isReindexingLocally}
-              title={t(
+            <Tooltip label={t(
                 "Retry indexing from the documents already stored in this knowledge base.",
-              )}
-              className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-red-200 bg-red-50 px-2.5 py-1 text-[12px] font-medium text-red-700 transition-colors hover:bg-red-100 disabled:opacity-50 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300"
-            >
-              {retrySubmitting || isReindexingLocally ? (
-                <Loader2 className="h-3 w-3 animate-spin" />
-              ) : (
-                <RefreshCw className="h-3 w-3" />
-              )}
-              {retrySubmitting || isReindexingLocally
-                ? t("Retrying…")
-                : t(
-                    kbProvider(kb) === "lightrag"
-                      ? "Review rebuild"
-                      : "Retry indexing",
-                  )}
-            </button>
+              )} side="top">
+              <button
+                type="button"
+                onClick={handleRetry}
+                disabled={retrySubmitting || isReindexingLocally}
+                className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-red-200 bg-red-50 px-2.5 py-1 text-[12px] font-medium text-red-700 transition-colors hover:bg-red-100 disabled:opacity-50 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300"
+              >
+                {retrySubmitting || isReindexingLocally ? (
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                ) : (
+                  <RefreshCw className="h-3 w-3" />
+                )}
+                {retrySubmitting || isReindexingLocally
+                  ? t("Retrying…")
+                  : t(
+                      kbProvider(kb) === "lightrag"
+                        ? "Review rebuild"
+                        : "Retry indexing",
+                    )}
+              </button>
+            </Tooltip>
           )}
         </div>
 
@@ -303,6 +312,7 @@ export default function KnowledgeBaseDetail({
 
       {/* Body */}
       <KbTaskLogs key={knowledgeBaseRef(kb)} kb={kb} task={task} />
+      <KbIndexingRun key={`run-${knowledgeBaseRef(kb)}`} kbName={knowledgeBaseRef(kb)} readOnly={kb.read_only} />
       <div className="min-h-0 flex-1 overflow-hidden">
         {activeSection === "files" ? (
           <KbFilesTab key={knowledgeBaseRef(kb)} kb={kb} task={task} />
@@ -367,9 +377,13 @@ export default function KnowledgeBaseDetail({
                   kb={kb}
                 />
               )}
+              {activeSection === "kiwix" && (
+                <KbKiwixArticlesSection key={knowledgeBaseRef(kb)} kb={kb} />
+              )}
               {activeSection === "settings" && (
                 <KbSettingsSection
                   kb={kb}
+                  onMove={onMove ? (targetWorkspaceId) => onMove(knowledgeBaseRef(kb), targetWorkspaceId) : undefined}
                   onSetDefault={() =>
                     kb.read_only
                       ? Promise.resolve()

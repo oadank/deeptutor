@@ -10,7 +10,11 @@ import {
   type ReactNode,
   type RefObject,
 } from "react";
-import { saveWorkspaceDraft, readWorkspaceDraft } from "@/lib/workspace-drafts";
+import {
+  saveWorkspaceDraft,
+  readWorkspaceDraft,
+  type WorkspaceDraft,
+} from "@/lib/workspace-drafts";
 import {
   ArrowUp,
   BookMarked,
@@ -70,6 +74,10 @@ import ResourceSelector from "./ResourceSelector";
 import type { ComposerResourceCatalog } from "@/hooks/useComposerResources";
 import type { ResourceSelection } from "@/features/chat/ChatStateAdapter";
 
+import TaskLinkSelector from "@/components/tasks/TaskLinkSelector";
+import { useTaskBoard } from "@/lib/task-board-store";
+import { sessionTaskLinks } from "@/lib/task-board-api";
+
 type SpaceSelectionCounts = {
   attachments: number;
   knowledge: number;
@@ -90,6 +98,7 @@ import { useVoiceRecorder } from "@/hooks/useVoiceRecorder";
 import type { CapabilityDef } from "@/features/capabilities/presentation";
 import AttachmentProcessingStatus from "./AttachmentProcessingStatus";
 import type { AttachmentProcessingItem } from "@/features/chat/selectors/attachment-processing";
+import Tooltip from "@/shared/ui/Tooltip";
 
 interface PendingAttachment {
   type: string;
@@ -184,6 +193,10 @@ const SEND_STATE_CLASS: Record<SendState, string> = {
 };
 
 export default memo(function ChatComposer({
+  taskSessionId,
+  draftTaskIds = [],
+  onDraftTaskIdsChange,
+  onTasksLinked,
   composerRef,
   capMenuRef,
   capBtnRef,
@@ -290,6 +303,10 @@ export default memo(function ChatComposer({
   inputHeader,
   showCapabilityChip = true,
 }: {
+  taskSessionId?: string | null;
+  draftTaskIds?: string[];
+  onDraftTaskIdsChange?: (ids: string[]) => void;
+  onTasksLinked?: () => void;
   composerRef: RefObject<HTMLDivElement | null>;
   capMenuRef: RefObject<HTMLDivElement | null>;
   capBtnRef: RefObject<HTMLButtonElement | null>;
@@ -515,6 +532,7 @@ export default memo(function ChatComposer({
     addDraftFilesRef.current = onAddFiles;
   }, [onAddFiles]);
   const restoredDraftRef = useRef(false);
+  const restoreFailedRef = useRef(false);
   useEffect(() => {
     let alive = true;
     const restore = readWorkspaceDraft();
@@ -540,22 +558,51 @@ export default memo(function ChatComposer({
             });
           if (files.length) addDraftFilesRef.current(files);
         })
-        .catch(() => {});
+        .catch((error) => {
+          if (!alive) return;
+          restoreFailedRef.current = true;
+          console.warn(
+            "[ChatComposer] workspace draft restore failed; keeping the stored draft untouched",
+            error,
+          );
+        });
     }
+    const collectDraft = () => ({
+      text: inputHandleRef.current?.getValue() || "",
+      attachments: draftAttachmentsRef.current.map(
+        ({ filename, base64, mimeType }) => ({ filename, base64, mimeType }),
+      ),
+    });
+    // The stored draft never made it into the composer, so saving the composer
+    // as-is could clobber it. Skip when nothing new was typed; otherwise merge
+    // the new input on top of the stored draft. If even the re-read fails,
+    // reject the switch (as on main) instead of losing the new input.
+    let storedDraft: WorkspaceDraft | undefined | null = null;
+    const saveAfterFailedRestore = () => {
+      restoreFailedRef.current = true;
+      const draft = collectDraft();
+      if (!draft.text && !draft.attachments.length) return Promise.resolve();
+      const merge = (stored?: WorkspaceDraft) =>
+        saveWorkspaceDraft({
+          text: [stored?.text, draft.text].filter(Boolean).join("\n"),
+          attachments: [...(stored?.attachments ?? []), ...draft.attachments],
+        });
+      // Re-read only once per mount so a retried switch merges the original
+      // stored draft instead of re-appending the composer to itself.
+      if (storedDraft !== null) return merge(storedDraft);
+      return readWorkspaceDraft().then((stored) => {
+        storedDraft = stored ?? { text: "", attachments: [] };
+        return merge(stored);
+      });
+    };
     const save = (event: Event) => {
       (event as CustomEvent<Promise<void>[]>).detail.push(
-        restore.then(() =>
-          saveWorkspaceDraft({
-            text: inputHandleRef.current?.getValue() || "",
-            attachments: draftAttachmentsRef.current.map(
-              ({ filename, base64, mimeType }) => ({
-                filename,
-                base64,
-                mimeType,
-              }),
+        restoreFailedRef.current
+          ? saveAfterFailedRestore()
+          : restore.then(
+              () => saveWorkspaceDraft(collectDraft()),
+              saveAfterFailedRestore,
             ),
-          }),
-        ),
       );
     };
     window.addEventListener("deeptutor:before-workspace-switch", save);
@@ -681,7 +728,11 @@ export default memo(function ChatComposer({
       );
       const finalContent = voiceClip ? `[语音消息] ${content}` : content;
       onSend(finalContent);
-      void saveWorkspaceDraft({ text: "", attachments: [] }).catch(() => {});
+      // Upstream: keep the draft while a failed submission is being restored
+      // (#1594) — the retry owns the text, clearing it would lose the row.
+      if (!restoreFailedRef.current) {
+        void saveWorkspaceDraft({ text: "", attachments: [] }).catch(() => {});
+      }
       setHasContent(false);
       inputHandleRef.current?.clear();
       // Sending can move focus to the button or rerender the empty-state
@@ -697,7 +748,21 @@ export default memo(function ChatComposer({
     doSendRef.current = doSend;
   }, [doSend]);
 
+  const { board: taskBoard } = useTaskBoard();
+  const linkedTaskIds = taskSessionId
+    ? sessionTaskLinks(taskBoard, taskSessionId, workspaceId ?? "")?.task_ids ?? []
+    : draftTaskIds;
+  const taskPanelPending = useRef(false);
+  useEffect(() => {
+    // Let users finish selecting tasks before the viewer changes the layout.
+    if (taskPanelPending.current && !spaceMenuOpen && !personaSelectorOpen) {
+      taskPanelPending.current = false;
+      onTasksLinked?.();
+    }
+  }, [spaceMenuOpen, personaSelectorOpen, onTasksLinked]);
+
   const hasReferences =
+    !!linkedTaskIds.length ||
     !!attachments.length ||
     !!selectedBookReferences.length ||
     !!selectedReadingReferences.length ||
@@ -869,6 +934,27 @@ export default memo(function ChatComposer({
   const selectedSkills = resourceSelection?.skills ?? [];
   const selectedMcp = resourceSelection?.mcp ?? [];
   const resourceItems: ComposerResourceItem[] = [];
+  if (taskSessionId || onDraftTaskIdsChange) {
+    resourceItems.push({
+      key: "tasks",
+      group: "Reference materials",
+      label: t("tasks.linked"),
+      icon: ClipboardList,
+      count: linkedTaskIds.length,
+      summary: linkedTaskIds.length ? `${linkedTaskIds.length} ${t("selected")}` : undefined,
+      node: (
+        <TaskLinkSelector
+          sessionId={taskSessionId}
+          workspaceId={workspaceId ?? ""}
+          draftTaskIds={draftTaskIds}
+          onDraftChange={onDraftTaskIdsChange}
+          onLinked={() => {
+            taskPanelPending.current = true;
+          }}
+        />
+      ),
+    });
+  }
   if (knowledgeBases.length > 0) {
     resourceItems.push({
       key: "knowledge",
@@ -1005,7 +1091,7 @@ export default memo(function ChatComposer({
   return (
     <div
       ref={composerRef}
-      className={`relative z-20 mx-auto w-full shrink-0 px-6 pb-5 ${hasMessages ? "pt-1 max-w-[960px]" : "max-w-[768px]"}`}
+      className={`relative ${spaceMenuOpen || personaSelectorOpen ? "z-[61]" : "z-20"} mx-auto w-full shrink-0 px-6 pb-5 ${hasMessages ? "pt-1 max-w-[960px]" : "max-w-[768px]"}`}
       style={{
         transition: "max-width 650ms cubic-bezier(0.16, 1, 0.3, 1)",
       }}
@@ -1102,6 +1188,12 @@ export default memo(function ChatComposer({
             </div>
           )}
 
+          {recorder.error && (
+            <div role="alert" className="px-4 pb-2 text-[11px] text-red-600">
+              {recorder.error}
+            </div>
+          )}
+
           {/* Claude-style chrome-free toolbar: no divider against the input
               area, no pill borders — quiet text/icon buttons that surface
               on hover. */}
@@ -1110,25 +1202,26 @@ export default memo(function ChatComposer({
               <div className={styles.context}>
                 {showCapabilityChip && (
                   <div className="relative min-w-0 max-w-full">
-                    <button
-                      ref={capBtnRef}
-                      aria-haspopup="menu"
-                      aria-expanded={capMenuOpen}
-                      onClick={() => onSetCapMenuOpen((v) => !v)}
-                      aria-label={t(activeCap.label)}
-                      title={t(activeCap.label)}
-                      className={`inline-flex h-8 max-w-full items-center rounded-lg px-2 text-[14px] font-medium transition-[background-color,color,transform] duration-150 active:scale-[0.97] ${
-                        capMenuOpen
-                          ? "bg-[var(--primary)]/10 text-[var(--primary)]"
-                          : "text-[var(--foreground)] hover:bg-[var(--muted)]/55"
-                      }`}
-                    >
-                      <CapIcon size={16} strokeWidth={1.7} className="shrink-0" />
-                      <span className="ml-1.5 inline-flex min-w-0 items-center gap-1.5 whitespace-nowrap">
-                        <span className="min-w-0 truncate">{t(activeCap.label)}</span>
-                        <ChevronDown size={13} strokeWidth={2} className={`shrink-0 transition-transform duration-200 ${capMenuOpen ? "rotate-180" : ""}`} />
-                      </span>
-                    </button>
+                    <Tooltip label={t(activeCap.label)} suppressed={capMenuOpen} side="top">
+                      <button
+                        ref={capBtnRef}
+                        aria-haspopup="menu"
+                        aria-expanded={capMenuOpen}
+                        onClick={() => onSetCapMenuOpen((v) => !v)}
+                        aria-label={t(activeCap.label)}
+                        className={`inline-flex h-8 max-w-full items-center rounded-lg px-2 text-[14px] font-medium transition-[background-color,color,transform] duration-150 active:scale-[0.97] ${
+                          capMenuOpen
+                            ? "bg-[var(--primary)]/10 text-[var(--primary)]"
+                            : "text-[var(--foreground)] hover:bg-[var(--muted)]/55"
+                        }`}
+                      >
+                        <CapIcon size={16} strokeWidth={1.7} className="shrink-0" />
+                        <span className="ml-1.5 inline-flex min-w-0 items-center gap-1.5 whitespace-nowrap">
+                          <span className="min-w-0 truncate">{t(activeCap.label)}</span>
+                          <ChevronDown size={13} strokeWidth={2} className={`shrink-0 transition-transform duration-200 ${capMenuOpen ? "rotate-180" : ""}`} />
+                        </span>
+                      </button>
+                    </Tooltip>
 
                     {capMenuOpen && (
                       <div
@@ -1320,44 +1413,41 @@ export default memo(function ChatComposer({
 
                 {contextBudget ? <ContextBudgetChip budget={contextBudget} /> : null}
 
-                <button
-                  type="button"
-                  onClick={recorder.toggle}
-                  disabled={recorder.state === "transcribing" || isStreaming}
-                  className={`group relative inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-[10px] transition-[background-color,color,transform] duration-150 active:scale-90 disabled:opacity-40 ${
-                    recorder.state === "recording"
-                      ? "bg-red-500/15 text-red-500"
-                      : "text-[var(--muted-foreground)] hover:bg-[var(--muted)]/55 hover:text-[var(--foreground)]"
-                  }`}
-                  aria-label={
-                    recorder.state === "recording"
-                      ? t("Stop recording")
-                      : t("Record voice")
-                  }
-                  title={
-                    recorder.error ||
-                    (recorder.state === "recording"
-                      ? t("Stop recording")
-                      : t("Record voice"))
-                  }
+                <Tooltip
+                  label={recorder.state === "recording" ? t("Stop recording") : t("Record voice")}
+                  description={recorder.error || undefined}
+                  side="top"
                 >
-                  {recorder.state === "recording" && (
-                    <span className="pointer-events-none absolute inset-0 rounded-[10px] border border-red-500/40 animate-pulse" />
-                  )}
-                  {recorder.state === "transcribing" ? (
-                    <Loader2
-                      size={16}
-                      strokeWidth={1.9}
-                      className="animate-spin"
-                    />
-                  ) : (
-                    <Mic size={16} strokeWidth={1.9} />
-                  )}
-                </button>
+                  <button
+                    type="button"
+                    onClick={recorder.toggle}
+                    disabled={recorder.state === "transcribing" || isStreaming}
+                    className={`group relative inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-[10px] transition-[background-color,color,transform] duration-150 active:scale-90 disabled:opacity-40 ${
+                      recorder.state === "recording"
+                        ? "bg-red-500/15 text-red-500"
+                        : "text-[var(--muted-foreground)] hover:bg-[var(--muted)]/55 hover:text-[var(--foreground)]"
+                    }`}
+                    aria-label={recorder.state === "recording" ? t("Stop recording") : t("Record voice")}
+                  >
+                    {recorder.state === "recording" && (
+                      <span className="pointer-events-none absolute inset-0 rounded-[10px] border border-red-500/40 animate-pulse" />
+                    )}
+                    {recorder.state === "transcribing" ? (
+                      <Loader2
+                        size={16}
+                        strokeWidth={1.9}
+                        className="animate-spin"
+                      />
+                    ) : (
+                      <Mic size={16} strokeWidth={1.9} />
+                    )}
+                  </button>
+                </Tooltip>
 
-                {/* [local patch 2026-09-02] 独立停止按钮：turn 进行中主按钮
-                    专职发送（后端注入），取消流式回复由它承担。答题等待时
-                    不显示——发答案本身就是推进方式。 */}
+                {/* [local patch 2026-09-02] 录音取消按钮：上游没有这个出口，
+                    录音中必须能放弃（否则只能等转写）。turn 进行中的"停止"
+                    已由下面的合并按钮承担（v1.6.14 上游把发送/停止并成一个
+                    原地 crossfade 的按钮），故此处只留录音取消。 */}
                 {recorder.state === "recording" && (
                   <button
                     type="button"
@@ -1369,27 +1459,47 @@ export default memo(function ChatComposer({
                     {t("Cancel")}
                   </button>
                 )}
-                {streamingBlocksSend && (
+                {/* The thing you press is the thing that's working is the
+                    thing you press to stop — one element for the whole turn,
+                    so the button never swaps out from under the cursor at the
+                    moment of the click. The glyph crossfades arrow→square in
+                    place (both stacked in the same grid cell) and the progress
+                    ring moves to the perimeter, where it can spin without
+                    fighting the square for the same space. */}
+                <Tooltip label={sendTitle} side="top">
                   <button
                     type="button"
-                    onClick={onCancelStreaming}
-                    className="group relative ml-1 inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-[var(--muted-foreground)] ring-1 ring-inset ring-[var(--border)] transition-[background-color,color,transform] duration-150 hover:bg-[var(--muted)]/55 hover:text-[var(--foreground)] active:scale-95"
-                    aria-label={t("Stop generating")}
-                    title={t("Stop generating")}
+                    onClick={handleSendButtonClick}
+                    disabled={sendState === "idle"}
+                    className={`group relative ml-1 inline-grid h-8 w-8 shrink-0 place-items-center rounded-full transition-[background-color,box-shadow,transform] duration-200 active:scale-95 ${SEND_STATE_CLASS[sendState]}`}
+                    aria-label={sendLabel}
+                    title={sendTitle}
                   >
-                    <Square size={10} strokeWidth={2.6} className="fill-current" />
+                    {sendState === "streaming" && (
+                      // Outside the fill, so "still working" reads at a glance
+                      // and dims on hover to hand the control back as "stop".
+                      <span className="pointer-events-none absolute -inset-[3px] rounded-full border-2 border-[color-mix(in_srgb,var(--primary)_15%,transparent)] border-t-[var(--primary)] animate-spin transition-opacity group-hover:opacity-30" />
+                    )}
+                    <ArrowUp
+                      size={16}
+                      strokeWidth={2.5}
+                      className={`col-start-1 row-start-1 transition-[opacity,transform] duration-200 ${
+                        sendState === "streaming"
+                          ? "scale-50 opacity-0"
+                          : "scale-100 opacity-100"
+                      }`}
+                    />
+                    <Square
+                      size={10}
+                      strokeWidth={2.6}
+                      className={`col-start-1 row-start-1 fill-current transition-[opacity,transform] duration-200 ${
+                        sendState === "streaming"
+                          ? "scale-100 opacity-100"
+                          : "scale-50 opacity-0"
+                      }`}
+                    />
                   </button>
-                )}
-                <button
-                  type="button"
-                  onClick={handleSendButtonClick}
-                  disabled={sendState === "idle"}
-                  className={`group relative ml-1 inline-grid h-8 w-8 shrink-0 place-items-center rounded-full transition-[background-color,box-shadow,transform] duration-200 active:scale-95 ${SEND_STATE_CLASS[sendState]}`}
-                  aria-label={sendLabel}
-                  title={sendTitle}
-                >
-                  <ArrowUp size={16} strokeWidth={2.5} />
-                </button>
+                </Tooltip>
               </div>
             </div>
           </div>

@@ -1,6 +1,8 @@
 "use client";
 
+import dynamic from "next/dynamic";
 import { browserStorage } from "@/shared/storage";
+import Tooltip from "@/shared/ui/Tooltip";
 
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import {
@@ -39,7 +41,6 @@ import {
 import { AnnotationList } from "./AnnotationList";
 import { AnnotationPopover, type PopoverAiAction } from "./AnnotationPopover";
 import { passagePrompts } from "@/lib/reading-passage-prompts";
-import { EpubDocumentView } from "./EpubDocumentView";
 import {
   PdfDocumentView,
   type JumpRequest,
@@ -67,6 +68,20 @@ import {
   type ReadingLocationEntry,
   type ReadingLocationHistory,
 } from "@/lib/reading-location-history";
+
+function EpubLoading() {
+  const { t } = useTranslation();
+  return (
+    <div role="status" aria-label={t("Loading")} className="flex h-full items-center justify-center">
+      <Loader2 aria-hidden="true" className="h-5 w-5 animate-spin text-[var(--muted-foreground)]" />
+    </div>
+  );
+}
+
+const EpubDocumentView = dynamic(
+  () => import("./EpubDocumentView").then(module => module.EpubDocumentView),
+  { ssr: false, loading: EpubLoading },
+);
 
 /** Event the reader dispatches to prefill the composer from a selection. */
 export const READER_ASK_EVENT = "dt:reader-ask";
@@ -235,6 +250,12 @@ export function ReaderPane({
   const [autoJump, setAutoJump] = useState(true);
   const [exporting, setExporting] = useState(false);
   const [currentLocator, setCurrentLocator] = useState(1);
+  const [epubPosition, setEpubPosition] = useState<{
+    materialId: string; percentage: number | null;
+  } | null>(null);
+  const handleEpubProgress = useCallback((percentage: number | null) => {
+    if (material) setEpubPosition({ materialId: material.material_id, percentage });
+  }, [material]);
   const nonceRef = useRef(0);
   const headingLocatorRef = useRef(1);
   const jumpMaterialIdRef = useRef<string | null>(null);
@@ -874,6 +895,13 @@ export function ReaderPane({
 
   const showAnnotations = annotationPanel ?? annotations.length > 0;
   const unitWord = material ? t(unitLabel(material.unit)) : "";
+  const isEpub = material?.render_mode === "epub";
+  const currentUnitTitle = isEpub
+    ? material?.unit_refs.find((row) => row.locator === currentLocator)?.title
+    : undefined;
+  const epubProgress = epubPosition?.materialId === material?.material_id
+    && epubPosition?.percentage != null
+    ? Math.round(epubPosition.percentage * 100) : null;
   const bookmarkedHere = bookmarks.some(
     (row) => row.locator === currentLocator,
   );
@@ -894,6 +922,18 @@ export function ReaderPane({
         icon: History,
         label: t("History"),
         onSelect: () => setShowHistory(true),
+      });
+      // The header's Forward button is desktop-only; on a phone the menu is
+      // where a learner comes back to it after following a citation.
+      items.push({
+        key: "forward",
+        icon: ArrowRight,
+        label: t("Forward"),
+        disabled:
+          locationHistory.index < 0 ||
+          locationHistory.index >= locationHistory.entries.length - 1,
+        onSelect: () => stepHistory(1),
+        mobileOnly: true,
       });
     }
     items.push({
@@ -928,10 +968,12 @@ export function ReaderPane({
     autoJump,
     exporting,
     hasHistory,
+    locationHistory,
     material,
     ownAnnotationList,
     runExport,
     showAnnotations,
+    stepHistory,
     t,
     toggleAutoJump,
   ]);
@@ -942,7 +984,7 @@ export function ReaderPane({
       <header className="flex h-11 shrink-0 items-center gap-1 border-b border-[var(--border)] px-2.5">
         <FileText
           size={14}
-          className="shrink-0 text-[var(--muted-foreground)]"
+          className="hidden shrink-0 text-[var(--muted-foreground)] md:block"
         />
         {/* The title, not the filename. A material saved from the web is
             stored under its content hash, so this line read
@@ -961,7 +1003,11 @@ export function ReaderPane({
             returns from a citation the assistant jumped to. Everything else
             that used to sit here — history, auto-jump, export, the notes
             panel — is a setting or a once-a-session action, and seven small
-            grey icons beside the title read as noise. They live under ⋯. */}
+            grey icons beside the title read as noise. They live under ⋯.
+            Below 768px the bar converges further (#916): back, title +
+            chapter, bookmark, ⋯. Forward is a secondary command there and
+            moves into the menu, and the file icon gives its width to the
+            chapter indicator. */}
         {locationHistory.entries.length > 0 && (
           <>
             <HeaderButton
@@ -977,6 +1023,7 @@ export function ReaderPane({
                 locationHistory.index < 0 ||
                 locationHistory.index >= locationHistory.entries.length - 1
               }
+              className="hidden md:inline-flex"
               onClick={() => stepHistory(1)}
             />
           </>
@@ -986,13 +1033,25 @@ export function ReaderPane({
           <>
             {/* The one place the reader's position is stated. Monospace is for
                 code, not for a line of UI copy; tabular figures alone stop the
-                number from jittering as the learner scrolls. */}
-            <span className="hidden shrink-0 whitespace-nowrap px-1 text-[11.5px] tabular-nums text-[var(--muted-foreground)] md:inline">
-              {t("{{unit}} {{n}} / {{total}}", {
-                unit: unitWord,
-                n: currentLocator,
-                total: material.unit_count,
-              })}
+                number from jittering as the learner scrolls. Below md it is the
+                "chapter" half of the converged title — title and indicator each
+                truncate inside their own share of the row, so together they
+                can never push the buttons past the edge. */}
+            <span className="min-w-0 max-w-[45%] shrink truncate whitespace-nowrap px-1 text-[11.5px] tabular-nums text-[var(--muted-foreground)] md:max-w-none md:shrink-0">
+              {isEpub ? (
+                <>
+                  <span className="max-w-[180px] truncate">
+                    {currentUnitTitle || material.title}
+                  </span>
+                  {epubProgress !== null && <span>{` · ${epubProgress}%`}</span>}
+                </>
+              ) : (
+                t("{{unit}} {{n}} / {{total}}", {
+                  unit: unitWord,
+                  n: currentLocator,
+                  total: material.unit_count,
+                })
+              )}
             </span>
             {onToggleBookmark && (
               <HeaderButton
@@ -1040,6 +1099,21 @@ export function ReaderPane({
               label={t("History")}
               onClick={() => {
                 setShowHistory(true);
+                setShowMoreTools(false);
+              }}
+            />
+          )}
+          {locationHistory.entries.length > 0 && (
+            <MenuToolButton
+              icon={ArrowRight}
+              label={t("Forward")}
+              disabled={
+                locationHistory.index < 0 ||
+                locationHistory.index >= locationHistory.entries.length - 1
+              }
+              className="md:hidden"
+              onClick={() => {
+                stepHistory(1);
                 setShowMoreTools(false);
               }}
             />
@@ -1182,6 +1256,7 @@ export function ReaderPane({
                 activateAnnotation(annotation.annotation_id)
               }
               onVisibleLocatorChange={handleVisibleLocator}
+              onProgressChange={handleEpubProgress}
               onHeadingsChange={onHeadingsChange}
               headingJump={headingJump}
               onError={setError}
@@ -1282,26 +1357,27 @@ function HeaderButton({
   className?: string;
 }) {
   return (
-    <button
-      ref={buttonRef}
-      type="button"
-      title={label}
-      aria-label={label}
-      aria-pressed={menu ? undefined : active}
-      aria-haspopup={menu ? "menu" : undefined}
-      aria-expanded={menu ? active : undefined}
-      disabled={spinning || disabled}
-      onClick={onClick}
-      className={`h-7 w-7 shrink-0 items-center justify-center rounded-lg transition disabled:cursor-default ${
-        className || "inline-flex"
-      } ${
-        active
-          ? "bg-[color-mix(in_srgb,var(--primary)_12%,transparent)] text-[var(--primary)]"
-          : "text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)] disabled:opacity-35 disabled:hover:bg-transparent"
-      }`}
-    >
-      <Icon size={14} className={spinning ? "animate-spin" : undefined} />
-    </button>
+    <Tooltip label={label} suppressed={Boolean(menu && active)}>
+      <button
+        ref={buttonRef}
+        type="button"
+        aria-label={label}
+        aria-pressed={menu ? undefined : active}
+        aria-haspopup={menu ? "menu" : undefined}
+        aria-expanded={menu ? active : undefined}
+        disabled={spinning || disabled}
+        onClick={onClick}
+        className={`h-7 w-7 shrink-0 items-center justify-center rounded-lg transition disabled:cursor-default ${
+          className || "inline-flex"
+        } ${
+          active
+            ? "bg-[color-mix(in_srgb,var(--primary)_12%,transparent)] text-[var(--primary)]"
+            : "text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)] disabled:opacity-35 disabled:hover:bg-transparent"
+        }`}
+      >
+        <Icon size={14} className={spinning ? "animate-spin" : undefined} />
+      </button>
+    </Tooltip>
   );
 }
 
@@ -1313,6 +1389,7 @@ function MenuToolButton({
   spinning,
   disabled,
   hint,
+  className = "",
 }: {
   icon: typeof FileText;
   label: string;
@@ -1322,17 +1399,17 @@ function MenuToolButton({
   disabled?: boolean;
   /** A second line saying what the setting currently does. */
   hint?: string;
+  className?: string;
 }) {
   return (
     <button
       type="button"
       role={active === undefined ? "menuitem" : "menuitemcheckbox"}
-      title={hint || label}
       aria-label={hint ? `${label}. ${hint}` : label}
       aria-checked={active}
       disabled={spinning || disabled}
       onClick={onClick}
-      className={`flex w-full items-center gap-2 rounded-lg px-2.5 text-left text-[12px] transition disabled:cursor-default ${hint ? "py-1.5" : "h-9"} ${
+      className={`${className} flex w-full items-center gap-2 rounded-lg px-2.5 text-left text-[12px] transition disabled:cursor-default ${hint ? "py-1.5" : "h-9"} ${
         active
           ? "bg-[color-mix(in_srgb,var(--primary)_12%,transparent)] text-[var(--primary)]"
           : "text-[var(--foreground)] hover:bg-[var(--muted)] disabled:opacity-35 disabled:hover:bg-transparent"

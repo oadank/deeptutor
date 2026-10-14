@@ -1,5 +1,6 @@
 "use client";
 
+import { FeaturePage, PageHeader, PAGE_SECTION_TITLE_CLASS } from '@/components/layout/FeaturePage'
 import {
   ArrowRight,
   BookOpen,
@@ -17,6 +18,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
+import Tooltip from "@/shared/ui/Tooltip";
 
 import { LearningSkeleton } from "@/components/learning/LearningShell";
 import { useChatWorkspaces } from "@/hooks/useChatWorkspaces";
@@ -37,7 +39,6 @@ import { activeWorkspaceId, scopedUrl } from "@/lib/workspace-scope";
 
 import { AddMaterialsDialog } from "./AddMaterialsDialog";
 import { FolderDialog } from "./FolderDialog";
-import { FolderGlyph } from "./FolderGlyph";
 import { DeleteCollectionDialog } from "./ReadingLibrary";
 import { MaterialGlyph, materialDetail, relativeDate } from "./shared";
 
@@ -172,23 +173,11 @@ export function ReadingFolderPage({ folderId }: { folderId: string }) {
         <span className="truncate text-[var(--foreground)]">{folder.title}</span>
       </nav>
 
-      <header className="mt-6 flex flex-col gap-5 sm:flex-row sm:items-end">
-        <FolderGlyph
-          color={folder.color}
-          files={files.length}
-          size={84}
-          className="shrink-0"
-        />
-        <div className="min-w-0 flex-1">
-          <h1 className="font-serif text-[26px] font-semibold leading-tight tracking-[-0.02em] md:text-[28px]">
-            {folder.title}
-          </h1>
-          <p className="mt-1.5 text-[12.5px] text-[var(--muted-foreground)]">
-            {t("{{count}} files", { count: files.length })}
-            {" · "}
-            {t("Stored in {{workspace}}", { workspace: workspaceLabel })}
-          </p>
-        </div>
+      <div className="mt-5">
+      <PageHeader
+        title={folder.title}
+        description={<>{t("{{count}} files", { count: files.length })}{" · "}{t("Stored in {{workspace}}", { workspace: workspaceLabel })}</>}
+        action={
         <div className="relative flex shrink-0 items-center gap-2">
           {files.length ? (
             <Link
@@ -254,7 +243,9 @@ export function ReadingFolderPage({ folderId }: { folderId: string }) {
             </>
           )}
         </div>
-      </header>
+        }
+      />
+      </div>
 
       {error && (
         <p role="alert" className="mt-4 text-[12px] text-[var(--destructive)]">
@@ -368,18 +359,12 @@ export function ReadingFolderPage({ folderId }: { folderId: string }) {
 }
 
 function FolderFrame({ children }: { children: React.ReactNode }) {
-  return (
-    <section className="h-full min-h-0 w-full overflow-y-auto bg-[var(--background)] text-[var(--foreground)]">
-      <div className="mx-auto w-full max-w-[920px] px-6 py-7 md:px-9 lg:py-9">
-        {children}
-      </div>
-    </section>
-  );
+  return <FeaturePage>{children}</FeaturePage>;
 }
 
 function SectionHeading({ label, count }: { label: string; count: number }) {
   return (
-    <h2 className="flex items-center gap-1.5 px-1 text-[11.5px] font-medium text-[var(--muted-foreground)]">
+    <h2 className={`mb-3 flex items-center gap-1.5 ${PAGE_SECTION_TITLE_CLASS}`}>
       {label}
       <span className="tabular-nums opacity-70">{count}</span>
     </h2>
@@ -410,45 +395,49 @@ function FileRow({
 
   return (
     <li className="group flex items-center">
-      <button
-        type="button"
-        onClick={onOpen}
-        title={t("Open in reader")}
-        className="flex min-w-0 flex-1 items-center gap-3 px-1 py-2.5 text-left transition hover:bg-[var(--secondary)]"
-      >
-        <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-[var(--muted)] text-[var(--muted-foreground)]">
-          {opening || pending ? (
-            <Loader2 size={14} className="animate-spin" />
-          ) : (
-            <MaterialGlyph material={material} size={14} />
-          )}
-        </span>
-        <span className="min-w-0 flex-1">
-          <span className="block truncate text-[13px] font-medium">
-            {material.title || material.filename}
-          </span>
-          {detail && (
-            <span
-              className={`block truncate text-[11px] ${
-                failed
-                  ? "text-[var(--destructive)]"
-                  : "text-[var(--muted-foreground)]"
-              }`}
-            >
-              {detail}
+      <span className="min-w-0 flex-1 [&>span]:w-full [&>span>button]:w-full">
+        <Tooltip label={t("Open in reader")}>
+          <button
+            type="button"
+            onClick={onOpen}
+            className="flex min-w-0 flex-1 items-center gap-3 px-1 py-2.5 text-left transition hover:bg-[var(--secondary)]"
+          >
+            <span className="flex size-8 shrink-0 items-center justify-center rounded-md bg-[var(--muted)] text-[var(--muted-foreground)]">
+              {opening || pending ? (
+                <Loader2 size={14} className="animate-spin" />
+              ) : (
+                <MaterialGlyph material={material} size={14} />
+              )}
             </span>
-          )}
-        </span>
-      </button>
-      <button
-        type="button"
-        onClick={onRemove}
-        aria-label={t("Remove from collection")}
-        title={t("Remove from collection")}
-        className="mx-1 flex size-7 shrink-0 items-center justify-center rounded-md text-[var(--muted-foreground)] opacity-100 transition hover:bg-[var(--muted)] hover:text-[var(--foreground)] sm:opacity-0 sm:focus:opacity-100 sm:group-hover:opacity-100"
-      >
-        <X size={13} />
-      </button>
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-[13px] font-medium">
+                {material.title || material.filename}
+              </span>
+              {detail && (
+                <span
+                  className={`block truncate text-[11px] ${
+                    failed
+                      ? "text-[var(--destructive)]"
+                      : "text-[var(--muted-foreground)]"
+                  }`}
+                >
+                  {detail}
+                </span>
+              )}
+            </span>
+          </button>
+        </Tooltip>
+      </span>
+      <Tooltip label={t("Remove from collection")}>
+        <button
+          type="button"
+          onClick={onRemove}
+          aria-label={t("Remove from collection")}
+          className="mx-1 flex size-7 shrink-0 items-center justify-center rounded-md text-[var(--muted-foreground)] opacity-100 transition hover:bg-[var(--muted)] hover:text-[var(--foreground)] sm:opacity-0 sm:focus:opacity-100 sm:group-hover:opacity-100"
+        >
+          <X size={13} />
+        </button>
+      </Tooltip>
     </li>
   );
 }

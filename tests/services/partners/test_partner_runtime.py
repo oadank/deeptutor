@@ -43,6 +43,42 @@ def _muted_progress_config() -> PartnerConfig:
 
 class TestTurnExecution:
     @pytest.mark.asyncio
+    async def test_feishu_turn_announces_thinking_before_any_output(
+        self, partners_root, fake_orchestrator
+    ):
+        """Reasoning never reaches a channel, so the reader gets a placeholder."""
+        fake_orchestrator.script = finish("done")
+        runner = _runner(partners_root, PartnerConfig(name="Ada", language="zh"))
+
+        await runner.process_message(_msg(channel="feishu"))
+
+        notice = await runner.bus.outbound.get()
+        assert notice.content == "🤔 正在思考…"
+        assert notice.metadata["_thinking_notice"] is True
+        assert notice.metadata["_progress"] is True
+
+    @pytest.mark.asyncio
+    async def test_web_turn_never_announces_thinking(self, partners_root, fake_orchestrator):
+        fake_orchestrator.script = finish("done")
+        runner = _runner(partners_root, PartnerConfig(name="Ada", language="zh"))
+
+        await runner.process_message(_msg(channel="web"))
+
+        assert runner.bus.outbound.empty()
+
+    @pytest.mark.asyncio
+    async def test_muted_progress_suppresses_the_thinking_notice(
+        self, partners_root, fake_orchestrator
+    ):
+        fake_orchestrator.script = finish("done")
+        config = PartnerConfig(name="Ada", channels={"feishu": {"sendProgress": False}})
+        runner = _runner(partners_root, config)
+
+        await runner.process_message(_msg(channel="feishu"))
+
+        assert runner.bus.outbound.empty()
+
+    @pytest.mark.asyncio
     async def test_model_history_and_request_header_survive_partner_turns(
         self, partners_root, fake_orchestrator, monkeypatch
     ):
@@ -135,6 +171,49 @@ class TestTurnExecution:
         assert history == [
             {"role": "user", "content": "what is 2+2?"},
             {"role": "assistant", "content": "The answer is 4."},
+        ]
+
+    @pytest.mark.asyncio
+    async def test_persists_presented_workspace_item_as_generated_attachment(
+        self, partners_root, fake_orchestrator
+    ):
+        workspace_item = {
+            "workspace_id": "ws_test",
+            "workspace_item_id": "wsi_test",
+            "relative_path": "outputs/chat/turn/report.md",
+            "filename": "report.md",
+            "url": "/files/workspace-items/ws_test/wsi_test",
+            "mime_type": "text/markdown",
+            "size_bytes": 42,
+            "generated": True,
+        }
+        fake_orchestrator.script = [
+            event(
+                StreamEventType.TOOL_RESULT,
+                metadata={"tool_metadata": {"workspace_items": [workspace_item]}},
+            ),
+            *finish("[Download](outputs/chat/turn/report.md)"),
+        ]
+
+        await _runner(partners_root).process_message(_msg())
+
+        assistant = _shared_store().messages("telegram:42")[1]
+        assert assistant["attachments"] == [
+            {
+                "type": "document",
+                "filename": "report.md",
+                "mime_type": "text/markdown",
+                "url": "/files/workspace-items/ws_test/wsi_test",
+                "size_bytes": 42,
+                "generated": True,
+                "origin": "workspace",
+                "workspace_id": "ws_test",
+                "workspace_item_id": "wsi_test",
+                "relative_path": "outputs/chat/turn/report.md",
+                "sha256": "",
+                "title": "",
+                "caption": "",
+            }
         ]
 
     @pytest.mark.asyncio

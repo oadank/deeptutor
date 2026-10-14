@@ -1,5 +1,7 @@
 "use client";
 
+import { pageActionClass, pageGridClass } from '@/components/layout/FeaturePage'
+import Tooltip from "@/shared/ui/Tooltip";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
@@ -271,7 +273,7 @@ export default function MyAgentsSection() {
   return (
     <div className="space-y-6">
       <SpaceSectionHeader
-        icon={Bot}
+        level={2}
         title={t("Imported conversations")}
         description={t(
           "Import ChatGPT exports or connect Claude Code and Codex folders. Open any imported conversation to keep chatting.",
@@ -281,7 +283,7 @@ export default function MyAgentsSection() {
             <button
               type="button"
               onClick={() => setWizardOpen(true)}
-              className="inline-flex items-center gap-1.5 rounded-lg bg-[var(--foreground)] px-3 py-1.5 text-[12px] font-medium text-[var(--background)] shadow-sm transition-opacity hover:opacity-90"
+              className={pageActionClass()}
             >
               <Plus className="h-3.5 w-3.5" />
               {t("Import conversations")}
@@ -294,7 +296,7 @@ export default function MyAgentsSection() {
         <EmptyState onAdd={() => setWizardOpen(true)} />
       ) : (
         <>
-          <div className="grid gap-3 sm:grid-cols-2">
+          <div className={pageGridClass(2)}>
             {cards.map((card) =>
               card.kind === "agent" ? (
                 <AgentCard
@@ -477,38 +479,40 @@ function AgentCard({
       </div>
 
       <div className="flex shrink-0 items-center gap-1">
-        <button
-          type="button"
-          onClick={(event) => {
-            event.stopPropagation();
-            onRefresh();
-          }}
-          disabled={refreshing}
-          title={t("Refresh history")}
-          aria-label={t("Refresh history")}
-          className="rounded-lg border border-[var(--border)]/50 p-2 text-[var(--muted-foreground)] transition-colors hover:border-[var(--border)] hover:text-[var(--foreground)] disabled:opacity-50"
-        >
-          {refreshing ? (
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
-          ) : (
-            <RefreshCw className="h-3.5 w-3.5" />
-          )}
-        </button>
-        <div ref={menuRef} className="relative">
+        <Tooltip label={t("Refresh history")} side="top">
           <button
             type="button"
             onClick={(event) => {
               event.stopPropagation();
-              setMenuOpen((v) => !v);
+              onRefresh();
             }}
-            title={t("More")}
-            aria-label={t("More")}
-            aria-haspopup="menu"
-            aria-expanded={menuOpen}
-            className="rounded-lg border border-[var(--border)]/50 p-2 text-[var(--muted-foreground)] transition-colors hover:border-[var(--border)] hover:text-[var(--foreground)]"
+            disabled={refreshing}
+            aria-label={t("Refresh history")}
+            className="rounded-lg border border-[var(--border)]/50 p-2 text-[var(--muted-foreground)] transition-colors hover:border-[var(--border)] hover:text-[var(--foreground)] disabled:opacity-50"
           >
-            <MoreHorizontal className="h-3.5 w-3.5" />
+            {refreshing ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <RefreshCw className="h-3.5 w-3.5" />
+            )}
           </button>
+        </Tooltip>
+        <div ref={menuRef} className="relative">
+          <Tooltip label={t("More")} side="top">
+            <button
+              type="button"
+              onClick={(event) => {
+                event.stopPropagation();
+                setMenuOpen((v) => !v);
+              }}
+              aria-label={t("More")}
+              aria-haspopup="menu"
+              aria-expanded={menuOpen}
+              className="rounded-lg border border-[var(--border)]/50 p-2 text-[var(--muted-foreground)] transition-colors hover:border-[var(--border)] hover:text-[var(--foreground)]"
+            >
+              <MoreHorizontal className="h-3.5 w-3.5" />
+            </button>
+          </Tooltip>
           {menuOpen && (
             <div
               role="menu"

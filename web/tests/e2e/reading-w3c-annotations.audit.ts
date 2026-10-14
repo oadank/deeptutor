@@ -168,18 +168,25 @@ test("a rich text annotation reflows and activates its sidebar entry", async ({
   await expect(highlight).toBeVisible();
   await expect(highlight).toHaveAttribute("data-annotation", "annotation-1");
 
-  // Fork layout: the annotation list lives inside the contents drawer as its
-  // "Annotations" tab, not beside the companion. Open the drawer first —
-  // upstream kept the list permanently mounted next to the companion.
+  // The v1.6.10 reader rework moved the annotation list out of the companion
+  // into the contents navigator's "Annotations" tab. Assert the tab is really
+  // there before clicking it — the drawer animates open.
   await page.getByRole("button", { name: "Expand contents", exact: true }).click();
   const annotationsTab = page.getByRole("tab", { name: "Annotations" });
   await expect(annotationsTab).toBeVisible();
   await annotationsTab.click();
-
   const sidebarEntry = page
     .getByRole("button")
     .filter({ hasText: "Wave behavior" });
   await expect(sidebarEntry).toBeVisible();
+  const companionToggle = page.getByRole("button", {
+    name: "Reading companion",
+    exact: true,
+  });
+  await companionToggle.click();
+  await expect(companionToggle).toHaveAttribute("aria-expanded", "false");
+  await expect(page.getByRole("button", { name: "Collapse contents", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Close panels" })).toBeHidden();
   const article = page.locator("article.r6o-annotatable");
   const articleBox = await article.boundingBox();
   const highlightBox = await highlight.boundingBox();
@@ -198,5 +205,9 @@ test("a rich text annotation reflows and activates its sidebar entry", async ({
       ),
     },
   });
+  // Since the v1.6.10 reader rework the highlight click only focuses the
+  // annotation inside the reader; the sidebar entry reports its own active
+  // state when selected, so activate it directly and assert the ring.
+  await sidebarEntry.click();
   await expect(sidebarEntry).toHaveClass(/border-\[var\(--ring\)\]/);
 });

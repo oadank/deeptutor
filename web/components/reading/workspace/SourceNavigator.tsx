@@ -32,6 +32,7 @@ import {
   type ReadingWorkspaceTab,
 } from "@/lib/reading-workspace-api";
 import { formatMediaTime, timeFromSourceHref } from "@/lib/reading-media-time";
+import Tooltip from "@/shared/ui/Tooltip";
 import { AnnotationList } from "../AnnotationList";
 import { iconForMaterial } from "./WorkspaceChrome";
 import { type TranscriptRow } from "./types";
@@ -415,15 +416,16 @@ export function SourceNavigator({
                             )}
                           </button>
                         )}
-                        <button
-                          type="button"
-                          onClick={() => onRemoveMaterial(candidate)}
-                          className="mr-1 shrink-0 rounded-md p-1 text-[var(--muted-foreground)] transition hover:bg-[var(--muted)] hover:text-[var(--destructive)]"
-                          aria-label={t("Remove from collection")}
-                          title={t("Remove from collection")}
-                        >
-                          <X size={10} />
-                        </button>
+                        <Tooltip label={t("Remove from collection")}>
+                          <button
+                            type="button"
+                            onClick={() => onRemoveMaterial(candidate)}
+                            className="mr-1 shrink-0 rounded-md p-1 text-[var(--muted-foreground)] transition hover:bg-[var(--muted)] hover:text-[var(--destructive)]"
+                            aria-label={t("Remove from collection")}
+                          >
+                            <X size={10} />
+                          </button>
+                        </Tooltip>
                       </div>
 
                       {expanded && (
@@ -461,6 +463,8 @@ export function SourceNavigator({
                               activeRow={activeDocumentRow}
                               pageFallback={pageFallback}
                               collapsedNodes={search ? new Set() : collapsedNodes}
+                              onNavigateHeading={onNavigateHeading}
+                              showLocator={isPdf}
                               onToggle={(key) =>
                                 setCollapsedNodes((current) => {
                                   const next = new Set(current);
@@ -473,24 +477,29 @@ export function SourceNavigator({
                             />
                           ) : (
                             visibleHeadings.map((heading) => (
-                              <button
+                              <span
                                 key={heading.id}
-                                type="button"
-                                onClick={() => onNavigateHeading(heading)}
-                                style={{
-                                  paddingLeft: `${
-                                    10 + (Math.min(heading.level, 4) - 1) * 10
-                                  }px`,
-                                }}
-                                className={`mb-0.5 block w-full truncate rounded-lg py-1.5 pr-2 text-left text-[12px] leading-[1.4] transition ${
-                                  activeHeadingId === heading.id
-                                    ? "bg-[var(--muted)] font-medium text-[var(--primary)]"
-                                    : "text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
-                                }`}
-                                title={heading.title}
+                                className="block w-full [&>span]:w-full [&>span>button]:w-full"
                               >
-                                {heading.title}
-                              </button>
+                                <Tooltip label={heading.title}>
+                                  <button
+                                    type="button"
+                                    onClick={() => onNavigateHeading(heading)}
+                                    style={{
+                                      paddingLeft: `${
+                                        10 + (Math.min(heading.level, 4) - 1) * 10
+                                      }px`,
+                                    }}
+                                    className={`mb-0.5 block w-full truncate rounded-lg py-1.5 pr-2 text-left text-[12px] leading-[1.4] transition ${
+                                      activeHeadingId === heading.id
+                                        ? "bg-[var(--muted)] font-medium text-[var(--primary)]"
+                                        : "text-[var(--muted-foreground)] hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
+                                    }`}
+                                  >
+                                    {heading.title}
+                                  </button>
+                                </Tooltip>
+                              </span>
                             ))
                           )}
                         </div>
@@ -574,16 +583,20 @@ export function WorkspaceOutlineBranch({
   activeRow,
   pageFallback,
   collapsedNodes,
+  onNavigateHeading,
   onToggle,
   onNavigate,
+  showLocator,
   depth = 0,
 }: {
   nodes: OutlineNode[];
   activeRow: OutlineRow | null;
   pageFallback: boolean;
   collapsedNodes: Set<string>;
+  onNavigateHeading: (heading: ReaderHeading) => void;
   onToggle: (key: string) => void;
   onNavigate: (locator: number) => void;
+  showLocator: boolean;
   depth?: number;
 }) {
   const { t } = useTranslation();
@@ -593,6 +606,35 @@ export function WorkspaceOutlineBranch({
         const key = `${node.row.locator}-${node.row.title}`;
         const active = node.row === activeRow;
         const collapsed = collapsedNodes.has(key);
+        const hasAnchor = Boolean(node.row.source_href && node.row.source_anchor);
+        const outlineButton = (
+          <button
+            type="button"
+            onClick={() => {
+              if (hasAnchor) {
+                onNavigateHeading({
+                  id: node.row.source_anchor ?? "",
+                  title: node.row.title,
+                  level: node.row.level,
+                  locator: node.row.locator,
+                  sourceHref: node.row.source_href,
+                });
+                return;
+              }
+              onNavigate(node.row.locator);
+            }}
+            className="flex min-w-0 flex-1 items-baseline gap-2 px-2 py-1.5 text-left"
+          >
+            {showLocator && (
+              <span className="w-7 shrink-0 text-right text-[11px] tabular-nums text-[var(--muted-foreground)]">
+                {node.row.locator}
+              </span>
+            )}
+            <span className="line-clamp-3 min-w-0 text-[12px] leading-[1.5]">
+              {node.row.title}
+            </span>
+          </button>
+        );
         return (
           <li key={key} className="mb-0.5 min-w-0">
             <div
@@ -602,33 +644,15 @@ export function WorkspaceOutlineBranch({
                   : "text-[var(--foreground)] hover:bg-[var(--muted)]"
               }`}
             >
-              <button
-                type="button"
-                onClick={() => onNavigate(node.row.locator)}
-                // The spelled-out locator is the tooltip rather than the label:
-                // see the number column below.
-                title={t("p. {{page}}", { page: node.row.locator })}
-                className="flex min-w-0 flex-1 items-baseline gap-2 px-2 py-1.5 text-left"
-              >
-                {/* A table of contents is read by its titles, so the title
-                    carries the weight and the locator is the quiet column
-                    beside it — the other way round, 74 blue page numbers
-                    out-shouted the headings they were pointing at.
-
-                    It is also just the number. "p. 12" fits the 32px this
-                    column had, but every translation of it does not: in
-                    Chinese ("第 12 页") 65 of this document's 74 rows wrapped
-                    onto a second line, so the list had two different row
-                    heights and a ragged left edge for the titles. Right-
-                    aligned tabular digits are what a printed contents page
-                    does anyway, and no translation can outgrow them. */}
-                <span className="w-7 shrink-0 text-right text-[11px] tabular-nums text-[var(--muted-foreground)]">
-                  {node.row.locator}
-                </span>
-                <span className="line-clamp-3 min-w-0 text-[12px] leading-[1.5]">
-                  {node.row.title}
-                </span>
-              </button>
+              <span className="inline-flex min-w-0 flex-1 [&>span]:w-full [&>span>button]:w-full">
+                {showLocator ? (
+                  <Tooltip label={t("p. {{page}}", { page: node.row.locator })}>
+                    {outlineButton}
+                  </Tooltip>
+                ) : (
+                  outlineButton
+                )}
+              </span>
               {node.children.length > 0 && (
                 <button
                   type="button"
@@ -651,6 +675,8 @@ export function WorkspaceOutlineBranch({
                 collapsedNodes={collapsedNodes}
                 onToggle={onToggle}
                 onNavigate={onNavigate}
+                onNavigateHeading={onNavigateHeading}
+                showLocator={showLocator}
                 depth={depth + 1}
               />
             )}

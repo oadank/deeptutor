@@ -105,6 +105,9 @@ KB_SEED_CHARS_PER_KB = 4000
 # tool calls ends the loop early — that is the normal exit.
 DEFAULT_MAX_ROUNDS = 8
 CONTEXT_WINDOW_GUARD_RATIO = 0.9
+# Provider image token accounting varies by model and resolution. Reserve a
+# conservative amount for each image instead of treating source pixels as free.
+IMAGE_TOKEN_GUARD_RESERVE = 4096
 _DispatchOutcome = DispatchOutcome
 
 
@@ -722,11 +725,16 @@ class AgenticLoopPipeline:
 
     def _compose_enabled_tools(self, context: UnifiedContext) -> list[str]:
         is_partner = self._is_partner_turn(context)
+        from deeptutor.tools.research_tools import scientific_context
+
         composed = compose_enabled_tools(
             registry=self.tool_lookup,
             requested_tools=context.enabled_tools,
             optional_whitelist=LOOP_OPTIONAL_TOOLS,
             mount_flags=ToolMountFlags(
+                has_scientific_research=scientific_context(
+                    context.user_message, context.active_capability, context.enabled_tools or []
+                ),
                 # PageIndex KBs are read via the preloaded MCP tools, not rag —
                 # a conversation with only PageIndex KBs doesn't mount rag at all.
                 # Excludes KBs owned by an exclusive capability (an Obsidian vault
@@ -844,6 +852,29 @@ class AgenticLoopPipeline:
             if (seed := cap.pre_loop_seed(context))
         ]
         return "\n\n".join(seed for seed in seeds if seed)
+
+    def _capability_skips_kb_seed(self, context: UnifiedContext) -> bool:
+        """Let an active capability say this turn's message is not a query.
+
+        The KB seed searches the raw user message. That is right for a
+        question, and wrong for a quiz pick like "A": the search has no
+        context and short-query backends reject it (#1624). The KBs stay
+        mounted, so the model can still retrieve with a real query.
+        """
+        for cap in self._active_loop_capabilities(context):
+            hook = getattr(cap, "skip_kb_seed", None)
+            if not callable(hook):
+                continue
+            try:
+                if hook(context):
+                    return True
+            except Exception:
+                logger.warning(
+                    "kb seed hook failed for capability %s",
+                    getattr(cap, "name", "?"),
+                    exc_info=True,
+                )
+        return False
 
     def _capability_finish_instruction(self, context: UnifiedContext, final_text: str) -> str:
         """Let an active capability reject a narrow tool-less finish once.
@@ -1323,8 +1354,16 @@ class AgenticLoopPipeline:
             sandbox_user_id=self._current_user_id(),
         )
         task_dir = Path(runtime_workspace.output_dir) if runtime_workspace is not None else task_dir
-        if tool_name == "rag":
-            kwargs.setdefault("mode", "hybrid")
+        if tool_name in {"rag", "preprint"}:
+            if tool_name == "rag":
+                kwargs.setdefault("mode", "hybrid")
+            else:
+                kwargs["_research_registry"] = self.tool_lookup
+            from deeptutor.services.llm.capabilities import supports_vision
+
+            kwargs["_vision_supported"] = supports_vision(
+                getattr(self, "binding", ""), getattr(self, "model", None)
+            )
         elif tool_name == "kb_files":
             # The report is read by the user as much as by the model, so it is
             # written in the turn's language. Injected server-side; the tool
@@ -1449,6 +1488,8 @@ class AgenticLoopPipeline:
         kbs = self._coexisting_rag_kbs(context)
         query = (context.user_message or "").strip()
         if not kbs or not query:
+            return ""
+        if self._capability_skips_kb_seed(context):
             return ""
         if len(kbs) > KB_SEED_MAX_KBS:
             kbs = kbs[:KB_SEED_MAX_KBS]
@@ -1659,6 +1700,8 @@ class AgenticLoopPipeline:
                 for part in content:
                     if isinstance(part, dict) and part.get("type") == "text":
                         total += count_tokens(str(part.get("text") or ""))
+                    elif isinstance(part, dict) and part.get("type") == "image_url":
+                        total += IMAGE_TOKEN_GUARD_RESERVE
         return total
 
     # ---- LLM client ------------------------------------------------------

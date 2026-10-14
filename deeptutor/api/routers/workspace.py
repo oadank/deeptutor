@@ -48,6 +48,11 @@ class DataMigrationPayload(BaseModel):
     include_historical: bool = False
 
 
+class KnowledgeMovePayload(BaseModel):
+    source_id: str = Field(min_length=1)
+    target_workspace_id: str = ""
+
+
 async def _data_operation(function, *args, **kwargs):
     _assert_migration_access()
     task = asyncio.create_task(asyncio.to_thread(function, *args, **kwargs))
@@ -56,6 +61,20 @@ async def _data_operation(function, *args, **kwargs):
         return await asyncio.shield(task)
     except (WorkspaceError, OSError, ValueError) as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@settings_router.post("/knowledge-bases/preview-move")
+async def preview_knowledge_move(payload: KnowledgeMovePayload) -> dict:
+    from deeptutor.services.workspace.kb_move import preview_kb_move
+
+    return await _data_operation(preview_kb_move, payload.source_id, payload.target_workspace_id)
+
+
+@settings_router.post("/knowledge-bases/move")
+async def move_knowledge_base(payload: KnowledgeMovePayload) -> dict:
+    from deeptutor.services.workspace.kb_move import move_kb
+
+    return await _data_operation(move_kb, payload.source_id, payload.target_workspace_id)
 
 
 def _assert_migration_access():
@@ -154,7 +173,7 @@ async def _migrate_workspaces(path: str, workspace_id: str | None = None) -> dic
         from deeptutor.services.workspace.data_migration import assert_no_pending_recovery
 
         with data_activity(exclusive=True):
-            assert_no_pending_recovery()
+            assert_no_pending_recovery(reject_unreadable=True)
             return await migrate_location()
 
     async def migrate_location() -> dict:
@@ -240,7 +259,7 @@ async def update_registered_workspace(workspace_id: str, payload: UpdateWorkspac
         from deeptutor.services.workspace.data_migration import assert_no_pending_recovery
 
         with data_activity(exclusive=True):
-            assert_no_pending_recovery()
+            assert_no_pending_recovery(reject_unreadable=True)
             workspace = get_content_workspace_service().update_workspace(
                 workspace_id, **payload.model_dump(exclude_unset=True)
             )

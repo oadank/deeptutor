@@ -1,5 +1,6 @@
 "use client";
 
+import { FeaturePage, PageHeader } from '@/components/layout/FeaturePage'
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -24,6 +25,7 @@ import {
 } from "@/components/UserAvatar";
 import { parseAvatarMarker } from "@/lib/avatar";
 import { formatDate, type Language } from "@/lib/datetime";
+import { accountRoleLabelKey } from "@/lib/account-role";
 
 const AVATAR_OUTPUT_SIZE = 256;
 // Decoding a huge photo just to throw away most pixels wastes memory; the
@@ -206,10 +208,9 @@ export default function ProfilePage() {
       : null;
 
   return (
-    <div className="h-screen overflow-y-auto bg-[var(--background)] px-4 py-10 [scrollbar-gutter:stable]">
-      <div className="mx-auto max-w-2xl">
+    <FeaturePage>
         {/* Header */}
-        <div className="mb-8">
+        <div>
           <Link
             href="/"
             className="mb-4 inline-flex items-center gap-1.5 text-sm text-[var(--muted-foreground)] hover:text-[var(--foreground)] transition-colors"
@@ -217,14 +218,7 @@ export default function ProfilePage() {
             <ArrowLeft size={16} />
             {t("Back")}
           </Link>
-          <div>
-            <h1 className="text-xl font-semibold text-[var(--foreground)]">
-              {t("My profile")}
-            </h1>
-            <p className="mt-0.5 text-sm text-[var(--muted-foreground)]">
-              {t("View your account and personalize your avatar")}
-            </p>
-          </div>
+          <PageHeader title={t("My profile")} description={t("View your account and personalize your avatar")} />
         </div>
 
         {error && (
@@ -262,7 +256,7 @@ export default function ProfilePage() {
                       }`}
                     >
                       {isAdmin && <ShieldCheck size={11} strokeWidth={2} />}
-                      {isAdmin ? t("Administrator") : t("User")}
+                      {isAdmin ? t("Administrator") : t(accountRoleLabelKey(profile.role))}
                     </span>
                   </div>
                   {joined && (
@@ -407,7 +401,6 @@ export default function ProfilePage() {
             </div>
           </>
         )}
-      </div>
-    </div>
+    </FeaturePage>
   );
 }

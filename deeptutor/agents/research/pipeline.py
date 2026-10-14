@@ -125,6 +125,9 @@ RESEARCH_BLOCK_TOOL_ALLOWLIST: frozenset[str] = frozenset(
         "rag",
         "web_search",
         "paper_search",
+        "preprint",
+        "research_audit",
+        "research_lit",
         "exec",
         "workspace_list",
         "workspace_read",
@@ -301,6 +304,10 @@ class ReportSectionPlan:
 class ReportOutline:
     title: str
     sections: tuple[ReportSectionPlan, ...]
+
+
+class IncompleteReportError(RuntimeError):
+    """A report stopped after some parts may already have reached the reader."""
 
 
 # ---------------------------------------------------------------------------
@@ -541,6 +548,7 @@ class ResearchPipeline:
 
         try:
             await self._prepare_pageindex_tools()
+            await self._prepare_research_providers(context)
             return await self._run_inner(
                 context=context,
                 topic=topic,
@@ -718,25 +726,37 @@ class ResearchPipeline:
         call_id = new_call_id("research-failure")
         meta = build_trace_metadata(
             call_id=call_id,
-            phase="researching",
-            label=self._t("labels.research_step", default="Research step"),
+            phase="reporting" if isinstance(exc, IncompleteReportError) else "researching",
+            label=(
+                self._t("labels.report_failure", default="Report incomplete")
+                if isinstance(exc, IncompleteReportError)
+                else self._t("labels.research_step", default="Research step")
+            ),
             call_kind="llm_final_response",
             trace_id=call_id,
             trace_role="response",
             trace_group="stage",
         )
-        message = f"{type(exc).__name__}: {exc}" if str(exc) else type(exc).__name__
+        if isinstance(exc, IncompleteReportError):
+            cause = exc.__cause__ or exc
+            error_message = f"{type(cause).__name__}: {cause}"
+            visible_message = str(exc)
+            stage = "reporting"
+        else:
+            error_message = f"{type(exc).__name__}: {exc}" if str(exc) else type(exc).__name__
+            visible_message = error_message
+            stage = "researching"
         await stream.error(
-            message,
+            error_message,
             source=SOURCE,
-            stage="researching",
+            stage=stage,
             metadata=merge_trace_metadata(meta, {"trace_kind": "error"}),
         )
         prefix = self._t("system.warning_prefix", default="⚠ ")
         await stream.content(
-            f"{prefix}{message}",
+            f"{prefix}{visible_message}",
             source=SOURCE,
-            stage="researching",
+            stage=stage,
             metadata=merge_trace_metadata(meta, {"trace_kind": "llm_output"}),
         )
 
@@ -1287,6 +1307,23 @@ class ResearchPipeline:
         # them into every report-writing step.
         section_count = len(outline.sections)
         conclusion_number = section_count + 2
+        report_parts = [
+            f"1. {self._t('labels.report_intro_part', default='Introduction')}",
+            *(
+                f"{index + 1}. {section.title}"
+                for index, section in enumerate(outline.sections, start=1)
+            ),
+            f"{conclusion_number}. {self._t('labels.report_conclusion_part', default='Conclusion')}",
+        ]
+
+        def incomplete_error(first_missing: int) -> IncompleteReportError:
+            notice_template = self._t(
+                "notices.report_incomplete",
+                default="The report stopped before these parts could be written: {parts}. Retry to generate the full report.",
+            )
+            return IncompleteReportError(
+                notice_template.format(parts=", ".join(report_parts[first_missing:]))
+            )
 
         section_texts: list[str] = []
 
@@ -1310,7 +1347,12 @@ class ResearchPipeline:
         # assembled response was normalized correctly.
         if section_texts:
             await self._stream_report_separator(stream)
-        intro = await self._write_intro(topic=topic, outline=outline, stream=stream, client=client)
+        try:
+            intro = await self._write_intro(
+                topic=topic, outline=outline, stream=stream, client=client
+            )
+        except Exception as exc:
+            raise incomplete_error(0) from exc
         if intro:
             section_texts.append(intro)
 
@@ -1318,32 +1360,38 @@ class ResearchPipeline:
         for section_index, section in enumerate(outline.sections, start=1):
             if section_texts:
                 await self._stream_report_separator(stream)
-            body = await self._write_section(
-                section=section,
-                section_index=section_index,
-                section_count=section_count,
-                section_number=section_index + 1,
-                topic=topic,
-                outline=outline,
-                blocks=blocks,
-                citations=citations,
-                stream=stream,
-                client=client,
-            )
+            try:
+                body = await self._write_section(
+                    section=section,
+                    section_index=section_index,
+                    section_count=section_count,
+                    section_number=section_index + 1,
+                    topic=topic,
+                    outline=outline,
+                    blocks=blocks,
+                    citations=citations,
+                    stream=stream,
+                    client=client,
+                )
+            except Exception as exc:
+                raise incomplete_error(section_index) from exc
             if body:
                 section_texts.append(body)
                 section_bodies.append(body)
 
         if section_texts:
             await self._stream_report_separator(stream)
-        conclusion = await self._write_conclusion(
-            topic=topic,
-            outline=outline,
-            section_bodies=section_bodies,
-            section_number=conclusion_number,
-            stream=stream,
-            client=client,
-        )
+        try:
+            conclusion = await self._write_conclusion(
+                topic=topic,
+                outline=outline,
+                section_bodies=section_bodies,
+                section_number=conclusion_number,
+                stream=stream,
+                client=client,
+            )
+        except Exception as exc:
+            raise incomplete_error(section_count + 1) from exc
         if conclusion:
             section_texts.append(conclusion)
 
@@ -1943,7 +1991,7 @@ class ResearchPipeline:
                             "content": self._t(
                                 "report.retry_complete",
                                 default=(
-                                    "The previous report part was empty or truncated. "
+                                    "The previous report part was incomplete or invalid. "
                                     "Regenerate the complete part from its ## heading, "
                                     "follow the required label protocol, and finish every sentence."
                                 ),
@@ -2028,6 +2076,31 @@ class ResearchPipeline:
         if self._pageindex_tool_context is not None:
             self.registry = self._pageindex_tool_context.registry
 
+    async def _prepare_research_providers(self, context):
+        from deeptutor.multi_user.paths import current_owner_id
+        from deeptutor.runtime.providers.scope import ToolScope
+        from deeptutor.runtime.providers.view import build_tool_view
+        from deeptutor.services.workspace.resources import current_resources
+        from deeptutor.tools.research_tools import scientific_mcp_tool
+
+        selected = current_resources().mcp
+        raw_filter = (context.metadata or {}).get("mcp_tools_filter")
+        scope = ToolScope(
+            owner_id=current_owner_id(),
+            session_id=context.session_id,
+            workspace_mcp=frozenset(selected) if selected is not None else None,
+            is_partner=(context.metadata or {}).get("source") == "partner",
+            caller_whitelist=frozenset(str(name) for name in raw_filter)
+            if isinstance(raw_filter, list)
+            else None,
+            exclusive_capability=bool(self._is_obsidian_kb),
+        )
+        view = await build_tool_view(
+            base_registry=self.registry, scope=scope, language=self.language
+        )
+        self.registry = view.registry
+        self._scientific_mcp_names = [tool.name for tool in view.pool if scientific_mcp_tool(tool)]
+
     def _pageindex_tool_names(self) -> list[str]:
         tool_context = getattr(self, "_pageindex_tool_context", None)
         return [tool.name for tool in tool_context.tools] if tool_context is not None else []
@@ -2054,6 +2127,7 @@ class ResearchPipeline:
             requested_tools=self.enabled_tools,
             optional_whitelist=RESEARCH_OPTIONAL_TOOLS,
             mount_flags=ToolMountFlags(
+                has_scientific_research=True,
                 has_kb=bool(
                     self.kb_name
                     and not self._is_obsidian_kb
@@ -2077,6 +2151,7 @@ class ResearchPipeline:
                 if name in RESEARCH_BLOCK_TOOL_ALLOWLIST and self._tool_in_registry(name)
             )
         names.extend(self._pageindex_tool_names())
+        names.extend(getattr(self, "_scientific_mcp_names", []))
         return list(dict.fromkeys(names))
 
     def _build_block_tool_schemas(
@@ -2121,6 +2196,11 @@ class ResearchPipeline:
             context,
             fallback_task_dir=task_dir,
         )
+        if tool_name == "preprint":
+            from deeptutor.services.llm.capabilities import supports_vision
+
+            kwargs["_vision_supported"] = supports_vision(self.binding, self.model)
+            kwargs["_research_registry"] = self.registry
         if tool_name == "rag":
             kwargs.setdefault("mode", "hybrid")
             if self.kb_name:
@@ -3105,7 +3185,7 @@ class _RephraseLoopHost:
         return outcome
 
     async def resolve_pause(self, dispatch: DispatchOutcome) -> bool:
-        from deeptutor.agents.chat.agentic_pipeline import (
+        from deeptutor.agents.loop.pipeline import (
             _format_user_reply_body,
             _normalise_user_reply,
         )

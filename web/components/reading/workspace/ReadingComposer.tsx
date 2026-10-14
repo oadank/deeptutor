@@ -12,7 +12,8 @@
  * before the message does, exactly like the retired bespoke textarea did.
  */
 
-import { useCallback } from "react";
+import { useCallback, useRef } from "react";
+import { COMMAND_CONFIRMATION_FAILED } from "@/features/chat/transport/command-delivery";
 import { X } from "lucide-react";
 import { useTranslation } from "react-i18next";
 
@@ -20,6 +21,8 @@ import StandaloneComposer, {
   type StandaloneComposerSubmission,
 } from "@/components/chat/home/StandaloneComposer";
 import { useChatStateAdapter } from "@/features/chat/ChatStateAdapter";
+import { useChatWorkspaces } from "@/hooks/useChatWorkspaces";
+import { useComposerResources } from "@/hooks/useComposerResources";
 import { useWorkspaceChatActions } from "@/hooks/useWorkspaceChatActions";
 import {
   hasPendingAskUser,
@@ -27,6 +30,7 @@ import {
 } from "@/lib/ask-user-state";
 import { notify } from "@/lib/notifications";
 import { setReadingViewport } from "@/lib/reading-turn-state";
+import Tooltip from "@/shared/ui/Tooltip";
 
 export function ReadingComposer({
   placeholder,
@@ -58,10 +62,15 @@ export function ReadingComposer({
     setKBs,
     setLLMSelection,
     setPersonaSelection,
+    setResourceSelection,
   } = useChatStateAdapter();
+  const { workspaces } = useChatWorkspaces();
+  const resourceCatalog = useComposerResources(state.workspaceId, workspaces);
   const { capabilities, activeCapabilityValue, selectCapability } =
     useWorkspaceChatActions();
   const { t } = useTranslation();
+  const fallbackInputRef = useRef<((text: string) => void) | null>(null);
+  const replyInputRef = prefillInputRef ?? fallbackInputRef;
 
   const awaitingUserReply = hasPendingAskUser(
     state.messages[state.messages.length - 1]?.events,
@@ -113,6 +122,9 @@ export function ReadingComposer({
           if (sent) return;
           notify(t(REPLY_SENT_AS_NEW_MESSAGE));
           sendAsNewMessage();
+        }).catch(() => {
+          notify(t(COMMAND_CONFIRMATION_FAILED), { tone: "error" });
+          replyInputRef.current?.(submission.content);
         });
         return;
       }
@@ -125,6 +137,7 @@ export function ReadingComposer({
       selection,
       sendMessage,
       submitUserReply,
+      replyInputRef,
       t,
     ],
   );
@@ -144,6 +157,9 @@ export function ReadingComposer({
       onLLMSelectionChange={setLLMSelection}
       personaSelection={state.personaSelection}
       onPersonaSelectionChange={setPersonaSelection}
+      resourceCatalog={resourceCatalog}
+      resourceSelection={state.resourceSelection}
+      onResourceSelectionChange={setResourceSelection}
       onSubmit={handleSubmit}
       onCancelStreaming={cancelStreamingTurn}
       inputPlaceholder={placeholder}
@@ -156,7 +172,7 @@ export function ReadingComposer({
           />
         ) : null
       }
-      prefillInputRef={prefillInputRef}
+      prefillInputRef={replyInputRef}
     />
   );
 }
@@ -180,15 +196,16 @@ function QuotedPassage({
       <p className="line-clamp-2 min-w-0 flex-1 border-l-2 border-[color-mix(in_srgb,var(--primary)_45%,transparent)] pl-2.5 text-[12.5px] leading-relaxed text-[var(--muted-foreground)]">
         {quote}
       </p>
-      <button
-        type="button"
-        aria-label={t("Remove quoted passage")}
-        title={t("Remove quoted passage")}
-        onClick={onRemove}
-        className="-mr-1 inline-flex size-6 shrink-0 items-center justify-center rounded-md text-[var(--muted-foreground)] transition hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
-      >
-        <X size={12} />
-      </button>
+      <Tooltip label={t("Remove quoted passage")}>
+        <button
+          type="button"
+          aria-label={t("Remove quoted passage")}
+          onClick={onRemove}
+          className="-mr-1 inline-flex size-6 shrink-0 items-center justify-center rounded-md text-[var(--muted-foreground)] transition hover:bg-[var(--muted)] hover:text-[var(--foreground)]"
+        >
+          <X size={12} />
+        </button>
+      </Tooltip>
     </div>
   );
 }

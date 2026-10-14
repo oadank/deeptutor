@@ -159,7 +159,11 @@ class PathService:
 
         if not candidate.is_file():
             return None
-        if candidate.suffix.lower() in self._PRIVATE_SUFFIXES:
+        # Markdown is a valid generated artifact (for example, an exec tool
+        # may write a report.md). Keep the private-suffix guard for settings,
+        # source, and runtime files, but let the explicit public-output
+        # allowlist below decide whether a .md artifact is readable.
+        if candidate.suffix.lower() in self._PRIVATE_SUFFIXES - {".md"}:
             return None
 
         parts = relative.parts
@@ -294,6 +298,13 @@ class PathService:
 
     def get_memory_dir(self) -> Path:
         return self.workspace_root / "memory"
+
+    def get_learning_journal_dir(self) -> Path:
+        """Soft multi-session learning journal (#740), sibling of memory."""
+        return self.workspace_root / "learning_journal"
+
+    def get_learning_journal_file(self) -> Path:
+        return self.get_learning_journal_dir() / "journal.json"
 
     def migrate_legacy_memory_markdown(self) -> bool:
         """Move the old workspace memory files into the canonical memory root once.

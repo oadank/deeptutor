@@ -51,8 +51,13 @@ import type {
   MessageRequestSnapshot,
 } from "@/features/chat/ChatStateAdapter";
 import { apiFetch, apiUrl } from "@/lib/api";
+import { notify } from "@/lib/notifications";
 import { docIconFor } from "@/lib/doc-attachments";
 import { useVoiceAutoplay } from "@/hooks/useVoiceAutoplay";
+import {
+  SPEECH_PLAYBACK_FAILURE_MESSAGE,
+  SPEECH_TIMEOUT_MESSAGE,
+} from "@/lib/voice-settings";
 import { extractMathAnimatorResult } from "@/lib/math-animator-types";
 import {
   extractQuizQuestions,
@@ -105,6 +110,7 @@ import {
 } from "@/features/chat/trace/TracePresentation";
 import { hasSettledFinalRound } from "@/features/chat/trace/selectors";
 import type { MessageTraceMetadata } from "@/features/chat/trace/memory";
+import type { OrphanedFailedTurn } from "@/lib/session-api";
 import { agentGlyph } from "@/components/agents/agent-icons";
 import { useConsultationReference } from "@/hooks/useConsultationReference";
 import { useConnectedAgentKinds } from "@/hooks/useConnectedAgentKinds";
@@ -144,6 +150,10 @@ interface ChatMessageItem {
   parentMessageId?: number | null;
   /** [local patch 2026-09-03] 消息时间戳（秒级 epoch；后端字段 created_at）。 */
   createdAt?: number | null;
+  /** The server never accepted this submission (#1594) — rendered as an
+   *  unsent message, not an ordinary sent one. */
+  failedSubmission?: boolean;
+  orphanedFailedTurn?: OrphanedFailedTurn;
 }
 
 interface NotebookReferenceGroup {
@@ -650,6 +660,7 @@ export const AssistantMessage = memo(function AssistantMessage({
   onSubmitUserReply,
   onAnswerMasteryQuestion,
   onSkipMasteryQuestion,
+  onChallengeMasteryQuestion,
   researchRequestSnapshot,
   onTraceToggle,
   masteryGrades,
@@ -717,6 +728,7 @@ export const AssistantMessage = memo(function AssistantMessage({
   onSkipMasteryQuestion?: (
     questionId: string,
   ) => void | boolean | Promise<void | boolean>;
+  onChallengeMasteryQuestion?: (questionId: string) => void | boolean | Promise<void | boolean>;
 }) {
   const { t } = useTranslation();
   const events = useMemo(() => msg.events ?? [], [msg.events]);
@@ -826,6 +838,7 @@ export const AssistantMessage = memo(function AssistantMessage({
               : false
           }
           onSkip={onSkipMasteryQuestion}
+          onChallenge={onChallengeMasteryQuestion}
         />
       );
     },
@@ -834,6 +847,7 @@ export const AssistantMessage = memo(function AssistantMessage({
       masterySkips,
       onAnswerMasteryQuestion,
       onSkipMasteryQuestion,
+  onChallengeMasteryQuestion,
     ],
   );
   // Set by ``request_credential`` when a configuration step needs a secret the
@@ -1470,10 +1484,24 @@ export function CopyActionButton({
   );
 }
 
-// Speaker button: synthesizes the reply via the configured TTS provider and
-// plays it. On the first manual play of a session it offers to auto-play the
-// rest; `autoPlayFresh` triggers playback automatically for a reply that just
-// finished generating when auto-play is on.
+// Speaker button: synthesizes this one reply and plays it. Auto-play of later
+// replies is a Settings preference (`autoPlayFresh`), not a first-click prompt.
+let activePlayback: { owner: object; stop: () => void } | null = null;
+
+async function ttsErrorMessage(resp: Response): Promise<string> {
+  try {
+    const body = (await resp.json()) as { detail?: unknown };
+    if (typeof body.detail === "string" && body.detail.trim()) return body.detail;
+    if (Array.isArray(body.detail)) {
+      const first = body.detail[0] as { msg?: string } | undefined;
+      if (typeof first?.msg === "string" && first.msg.trim()) return first.msg;
+    }
+  } catch {
+    /* non-JSON error body */
+  }
+  return "";
+}
+
 export function PlayAudioButton({
   content,
   conversationKey,
@@ -1484,19 +1512,18 @@ export function PlayAudioButton({
   autoPlayFresh: boolean;
 }) {
   const { t } = useTranslation();
-  const {
-    autoplayEnabled,
-    enableForSession,
-    markPrompted,
-    shouldPromptOnFirstPlay,
-  } = useVoiceAutoplay(conversationKey);
+  const { autoplayEnabled } = useVoiceAutoplay(conversationKey);
   const [state, setState] = useState<"idle" | "loading" | "playing">("idle");
-  const [showPrompt, setShowPrompt] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const urlRef = useRef<string | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+  const genRef = useRef(0);
   const autoPlayedRef = useRef(false);
+  const playbackOwnerRef = useRef<object>({});
 
   const cleanup = useCallback(() => {
+    abortRef.current?.abort();
+    abortRef.current = null;
     if (audioRef.current) {
       audioRef.current.pause();
       audioRef.current = null;
@@ -1507,58 +1534,88 @@ export function PlayAudioButton({
     }
   }, []);
 
+  const stop = useCallback(() => {
+    genRef.current += 1;
+    cleanup();
+    setState("idle");
+    if (activePlayback?.owner === playbackOwnerRef.current) activePlayback = null;
+  }, [cleanup]);
+
   const play = useCallback(async () => {
+    activePlayback?.stop();
+    const gen = ++genRef.current;
+    abortRef.current?.abort();
+    const ac = new AbortController();
+    abortRef.current = ac;
+    activePlayback = { owner: playbackOwnerRef.current, stop };
     setState("loading");
     try {
       const resp = await apiFetch(apiUrl("/api/voice/tts"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ text: content }),
+        signal: ac.signal,
       });
+      if (gen !== genRef.current) return;
       if (!resp.ok) {
-        cleanup();
-        setState("idle");
+        const detail = await ttsErrorMessage(resp);
+        if (gen !== genRef.current) return;
+        notify(
+          t(detail || (resp.status === 504 ? SPEECH_TIMEOUT_MESSAGE : SPEECH_PLAYBACK_FAILURE_MESSAGE)),
+          { tone: "error" },
+        );
+        stop();
         return;
       }
       const blob = await resp.blob();
-      cleanup();
+      if (gen !== genRef.current) return;
+      if (urlRef.current) {
+        URL.revokeObjectURL(urlRef.current);
+        urlRef.current = null;
+      }
       const url = URL.createObjectURL(blob);
       urlRef.current = url;
       const audio = new Audio(url);
       audioRef.current = audio;
       pauseOtherAudio(audio);
       audio.onended = () => {
+        if (gen !== genRef.current) return;
         setState("idle");
         cleanup();
+        if (activePlayback?.owner === playbackOwnerRef.current) activePlayback = null;
       };
       audio.onerror = () => {
-        setState("idle");
-        cleanup();
+        if (gen !== genRef.current) return;
+        notify(t(SPEECH_PLAYBACK_FAILURE_MESSAGE), {
+          tone: "error",
+        });
+        stop();
       };
       await audio.play();
+      if (gen !== genRef.current) {
+        audio.pause();
+        return;
+      }
       setState("playing");
-    } catch {
-      cleanup();
-      setState("idle");
+    } catch (err) {
+      if (gen !== genRef.current) return;
+      if (err instanceof Error && err.name === "AbortError") return;
+      notify(t(SPEECH_PLAYBACK_FAILURE_MESSAGE), {
+        tone: "error",
+      });
+      stop();
     }
-  }, [cleanup, content]);
+  }, [cleanup, content, stop, t]);
 
   const handleClick = useCallback(() => {
     if (state === "playing" || state === "loading") {
-      cleanup();
-      setState("idle");
+      stop();
       return;
     }
-    const willPrompt = shouldPromptOnFirstPlay();
     void play();
-    if (willPrompt) {
-      markPrompted();
-      setShowPrompt(true);
-    }
-  }, [cleanup, markPrompted, play, shouldPromptOnFirstPlay, state]);
+  }, [play, state, stop]);
 
-  // Auto-play a freshly-generated reply when enabled, exactly once. Deferred
-  // to a timer so synthesis (which sets state) starts off the effect body.
+  // Auto-play a freshly-generated reply when Settings auto-play is on.
   useEffect(() => {
     if (!autoPlayFresh || !autoplayEnabled) return;
     if (autoPlayedRef.current) return;
@@ -1568,7 +1625,11 @@ export function PlayAudioButton({
     return () => window.clearTimeout(id);
   }, [autoPlayFresh, autoplayEnabled, content, play]);
 
-  useEffect(() => cleanup, [cleanup]);
+  useEffect(() => () => {
+    genRef.current += 1;
+    cleanup();
+    if (activePlayback?.owner === playbackOwnerRef.current) activePlayback = null;
+  }, [cleanup]);
 
   return (
     <div className="relative inline-flex">
@@ -1595,32 +1656,6 @@ export function PlayAudioButton({
           )}
         </button>
       </Tooltip>
-      {showPrompt && (
-        <div className="absolute bottom-full left-0 z-30 mb-2 w-60 rounded-lg border border-[var(--border)] bg-[var(--card)] p-3 shadow-lg">
-          <p className="text-[12px] leading-relaxed text-[var(--foreground)]">
-            {t("Auto-play replies in this conversation?")}
-          </p>
-          <div className="mt-2.5 flex justify-end gap-2">
-            <button
-              type="button"
-              onClick={() => setShowPrompt(false)}
-              className="rounded-md px-2.5 py-1 text-[11.5px] text-[var(--muted-foreground)] hover:bg-[var(--muted)]/50 hover:text-[var(--foreground)]"
-            >
-              {t("Not now")}
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                enableForSession();
-                setShowPrompt(false);
-              }}
-              className="rounded-md bg-[var(--primary)] px-2.5 py-1 text-[11.5px] font-medium text-[var(--primary-foreground)] hover:bg-[var(--primary)]/90"
-            >
-              {t("Turn on")}
-            </button>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
@@ -1713,6 +1748,7 @@ export const UserMessage = memo(function UserMessage({
   siblingInfo,
   onSwitchBranch,
   availableKbNames,
+  kbDisplayNames,
   showModeBadge,
   onOpenConsultation,
 }: {
@@ -1726,6 +1762,9 @@ export const UserMessage = memo(function UserMessage({
   onSwitchBranch?: (parentMessageId: number | null, childId: number) => void;
   /** Names of KBs confirmed to exist. Omitted when the KB list is unavailable. */
   availableKbNames?: Set<string>;
+  /** Qualified KB ref -> display name from the selection catalog; the chip
+   *  label falls back to the raw ref when no entry matches. */
+  kbDisplayNames?: Record<string, string>;
   /** Label the bubble with its capability. A single-capability surface
    *  already names the mode in its own chrome. */
   showModeBadge?: boolean;
@@ -1836,7 +1875,7 @@ export const UserMessage = memo(function UserMessage({
           key: `kb-${name}`,
           icon: Database,
           kind: t("Knowledge"),
-          label: name,
+          label: kbDisplayNames?.[name] ?? name,
         };
       }),
     ...(snap?.bookReferences ?? []).map((ref): ContextTreeItem => ({
@@ -2001,6 +2040,18 @@ export const UserMessage = memo(function UserMessage({
             <div className="whitespace-pre-wrap">{msg.content}</div>
           </div>
         )}
+        {/* Unsent marker (#1594): this text never reached the server, so the
+            bubble must not read as an ordinary sent message. The error and
+            retry live next to the composer, not on an assistant bubble. */}
+        {!editing && msg.failedSubmission ? (
+          <div
+            data-unsent="true"
+            className="flex items-center gap-1 pr-1 text-[11px] font-medium text-[var(--destructive)]"
+          >
+            <AlertCircle className="h-3.5 w-3.5" aria-hidden="true" />
+            {t("Not sent")}
+          </div>
+        ) : null}
         {!editing && refTreeItems.length > 0 && (
           <div className="pr-1">
             <ContextReferenceTree
@@ -2011,8 +2062,12 @@ export const UserMessage = memo(function UserMessage({
             />
           </div>
         )}
+        {/* Branch navigation is the only way back to the pre-edit branch
+            after an edit forks the transcript (#1410): it stays on this
+            action row, outside the hover reveal that gates Copy/Edit, so
+            the way back to history is visible without hovering. */}
         {!editing && (onCopy || canEdit || siblingInfo) && msg.content && (
-          <div className="flex h-7 items-center justify-end gap-1 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+          <div className="flex h-7 items-center justify-end gap-1">
             {siblingInfo && siblingInfo.total > 1 && (
               <BranchNavigator
                 info={siblingInfo}
@@ -2021,15 +2076,19 @@ export const UserMessage = memo(function UserMessage({
                 }
               />
             )}
-            {onCopy && (
-              <CopyActionButton content={msg.content} onCopy={onCopy} />
-            )}
-            {canEdit && (
-              <RoughActionButton
-                icon={Pencil}
-                label={t("Edit")}
-                onClick={startEdit}
-              />
+            {(onCopy || canEdit) && (
+              <div className="flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+                {onCopy && (
+                  <CopyActionButton content={msg.content} onCopy={onCopy} />
+                )}
+                {canEdit && (
+                  <RoughActionButton
+                    icon={Pencil}
+                    label={t("Edit")}
+                    onClick={startEdit}
+                  />
+                )}
+              </div>
             )}
           </div>
         )}
@@ -2054,7 +2113,7 @@ function ReadingPassageQuote({ quote, href }: { quote: string; href?: string }) 
   return href ? (
     <a
       href={href}
-      title={t("Go to this passage")}
+      aria-label={`${t("Go to this passage")}: ${quote}`}
       className={`${className} transition-colors hover:text-[var(--foreground)]`}
     >
       {text}
@@ -2081,9 +2140,11 @@ export const ChatMessageList = memo(function ChatMessageList({
   onEditMessage,
   onSwitchBranch,
   availableKbNames,
+  kbDisplayNames,
   onSubmitUserReply,
   onAnswerMasteryQuestion,
   onSkipMasteryQuestion,
+  onChallengeMasteryQuestion,
   showModeBadge = true,
   onLoadMessageTrace,
   onReleaseMessageTrace,
@@ -2140,10 +2201,15 @@ export const ChatMessageList = memo(function ChatMessageList({
   onSkipMasteryQuestion?: (
     questionId: string,
   ) => void | boolean | Promise<void | boolean>;
+  onChallengeMasteryQuestion?: (questionId: string) => void | boolean | Promise<void | boolean>;
   /** Names of KBs confirmed to exist. Omitted when the KB list is unavailable. */
   availableKbNames?: Set<string>;
+  /** Qualified KB ref -> display name, from the same catalog the composer
+   *  resolves against. Snapshots store the ref; only the chip label should
+   *  show the human-readable name (falls back to the ref when unmapped). */
+  kbDisplayNames?: Record<string, string>;
   /** Label each user bubble with its capability. Off on surfaces that run a
-   *  single capability and already name it in their own chrome. */
+   *  single capability and already name it in its own chrome. */
   showModeBadge?: boolean;
   onLoadMessageTrace?: (messageId: number) => Promise<void>;
   onReleaseMessageTrace?: (messageId: number) => void;
@@ -2352,6 +2418,10 @@ export const ChatMessageList = memo(function ChatMessageList({
           const sib =
             msg.id !== undefined ? siblingsByMessageId.get(msg.id) : undefined;
           const reply = messageRows[rowIndex + 1]?.msg;
+          const orphanedFailure =
+            reply?.role === "assistant" && reply.parentMessageId === msg.id
+              ? null
+              : msg.orphanedFailedTurn;
           const consultationEvents = reply?.role === "assistant"
             ? (reply.events ?? []).filter(event => event.metadata?.trace_kind === "subagent_event")
             : [];
@@ -2372,11 +2442,34 @@ export const ChatMessageList = memo(function ChatMessageList({
                 siblingInfo={sib}
                 onSwitchBranch={onSwitchBranch}
                 availableKbNames={availableKbNames}
+                kbDisplayNames={kbDisplayNames}
                 showModeBadge={showModeBadge}
                 onOpenConsultation={consultationEvents.length && onOpenConsultation
                   ? () => onOpenConsultation(consultationEvents)
                   : undefined}
               />
+              {orphanedFailure ? (
+                <div
+                  role="alert"
+                  data-orphaned-failed-turn={orphanedFailure.turn_id}
+                  className="mt-3 flex w-full max-w-[min(520px,90%)] items-center gap-2 rounded-xl border border-[var(--destructive)]/30 bg-[var(--destructive)]/5 px-3 py-2"
+                >
+                  <AlertCircle className="h-4 w-4 shrink-0 text-[var(--destructive)]" />
+                  <span className="min-w-0 flex-1 text-[12px] leading-[1.5] text-[var(--foreground)]">
+                    {orphanedFailure.error || t("The turn was interrupted.")}
+                  </span>
+                  {!isStreaming && rowIndex === messageRows.length - 1 &&
+                    canResendLastTurn && orphanedFailure.retryable && onResendLastTurn ? (
+                    <button
+                      type="button"
+                      onClick={onResendLastTurn}
+                      className="shrink-0 rounded-md px-2 py-1 text-[11.5px] font-medium text-[var(--destructive)] hover:bg-[var(--destructive)]/10"
+                    >
+                      {t("Retry")}
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
             </div>
           );
         }
@@ -2444,6 +2537,7 @@ export const ChatMessageList = memo(function ChatMessageList({
                 onSubmitUserReply={onSubmitUserReply}
                 onAnswerMasteryQuestion={onAnswerMasteryQuestion}
                 onSkipMasteryQuestion={onSkipMasteryQuestion}
+                onChallengeMasteryQuestion={onChallengeMasteryQuestion}
                 researchRequestSnapshot={
                   pairedUserMessage?.requestSnapshot ?? null
                 }

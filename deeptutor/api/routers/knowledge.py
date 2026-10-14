@@ -29,11 +29,12 @@ from fastapi import (
     File,
     Form,
     HTTPException,
+    Query,
     UploadFile,
     WebSocket,
     WebSocketDisconnect,
 )
-from fastapi.responses import FileResponse, PlainTextResponse, StreamingResponse
+from fastapi.responses import FileResponse, PlainTextResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 from deeptutor.api.routers.auth import require_admin
@@ -96,7 +97,9 @@ from deeptutor.services.rag.pipelines.ima.config import (
     ImaCredentials,
     get_account_credentials,
 )
+from deeptutor.services.rag.visual_assets import VisualAssetStore
 from deeptutor.services.web_source.scheduler import get_web_source_sync_scheduler
+from deeptutor.services.workspace.knowledge import workspace_id_for_kb_base_dir
 from deeptutor.utils.document_extractor import (
     MAX_EXTRACTED_CHARS_PER_DOC,
     DocumentExtractionError,
@@ -968,15 +971,36 @@ def _matching_index_is_valid(kb_name: str, matching_version: dict | None) -> boo
         return False
 
 
-async def run_initialization_task(initializer: KnowledgeBaseInitializer, task_id: str):
+async def run_initialization_task(
+    initializer: KnowledgeBaseInitializer,
+    task_id: str,
+    *,
+    storage_workspace_id: str | None = None,
+):
     """Background task for knowledge base initialization"""
     owner = getattr(initializer, "owner", None)
     if owner is not None and get_current_user_or_none() != owner:
         token = set_current_user(owner)
         try:
-            return await run_initialization_task(initializer, task_id)
+            return await run_initialization_task(
+                initializer, task_id, storage_workspace_id=storage_workspace_id
+            )
         finally:
             reset_current_user(token)
+
+    # FastAPI runs BackgroundTasks after the create route has left its
+    # workspace_context. Keep the selected storage scope for the parser,
+    # indexer, config service, and final status write, including on failure.
+    if storage_workspace_id is not None:
+        from deeptutor.services.workspace.context import workspace_context
+        from deeptutor.services.workspace.knowledge import library_request
+
+        with workspace_context(storage_workspace_id):
+            token = library_request.set(False)
+            try:
+                return await run_initialization_task(initializer, task_id)
+            finally:
+                library_request.reset(token)
 
     task_manager = TaskIDManager.get_instance()
     task_stream_manager = get_task_stream_manager()
@@ -999,6 +1023,13 @@ async def run_initialization_task(initializer: KnowledgeBaseInitializer, task_id
             indexed_count = len(
                 FileTypeRouter.collect_supported_files(initializer.raw_dir, recursive=True)
             )
+            from deeptutor.knowledge.indexing_run import load_run
+
+            receipt = load_run(initializer.raw_dir.parent)
+            if receipt and receipt.get("provider") == "llamaindex":
+                indexed_count = sum(
+                    doc.get("status") == "completed" for doc in receipt["documents"].values()
+                )
 
             initializer.progress_tracker.update(
                 ProgressStage.COMPLETED,
@@ -1096,6 +1127,7 @@ async def run_upload_processing_task(
     folder_root: str = None,
     owner=None,
     accepted_indexing_snapshot=None,
+    storage_workspace_id: str | None = None,
 ):
     """Background task for processing uploaded files.
 
@@ -1121,9 +1153,30 @@ async def run_upload_processing_task(
                 folder_id=folder_id,
                 folder_root=folder_root,
                 accepted_indexing_snapshot=accepted_indexing_snapshot,
+                storage_workspace_id=storage_workspace_id,
             )
         finally:
             reset_current_user(token)
+
+    if storage_workspace_id is not None:
+        from deeptutor.services.workspace.context import workspace_context
+        from deeptutor.services.workspace.knowledge import library_request
+
+        with workspace_context(storage_workspace_id):
+            token = library_request.set(False)
+            try:
+                return await run_upload_processing_task(
+                    kb_name=kb_name,
+                    base_dir=base_dir,
+                    uploaded_file_paths=uploaded_file_paths,
+                    task_id=task_id,
+                    rag_provider=rag_provider,
+                    folder_id=folder_id,
+                    folder_root=folder_root,
+                    accepted_indexing_snapshot=accepted_indexing_snapshot,
+                )
+            finally:
+                library_request.reset(token)
 
     task_manager = TaskIDManager.get_instance()
     task_stream_manager = get_task_stream_manager()
@@ -1330,17 +1383,27 @@ async def run_upload_processing_task(
 
 @router.get("/knowledge-bases/health")
 async def health_check():
-    """Health check endpoint"""
+    """Count registered KBs without constructing/probing the catalog (#1711)."""
+    return await asyncio.to_thread(_knowledge_health)
+
+
+def _knowledge_health():
     try:
-        manager = get_kb_manager()
-        config_exists = manager.config_file.exists()
-        kb_count = len(manager.list_knowledge_bases())
+        base_dir = current_kb_base_dir()
+        config_file = base_dir / "kb_config.json"
+        config_exists = config_file.exists()
+        config = (
+            json.loads(config_file.read_text(encoding="utf-8").strip() or "{}")
+            if config_exists
+            else {}
+        )
+        kb_count = len(config.get("knowledge_bases", {}))
         return {
             "status": "ok",
-            "config_file": str(manager.config_file),
+            "config_file": str(config_file),
             "config_exists": config_exists,
-            "base_dir": str(manager.base_dir),
-            "base_dir_exists": manager.base_dir.exists(),
+            "base_dir": str(base_dir),
+            "base_dir_exists": base_dir.exists(),
             "knowledge_bases_count": kb_count,
         }
     except Exception as e:
@@ -1523,16 +1586,31 @@ class LlamaIndexConfigUpdate(BaseModel):
     chunk_size: int | None = None
     chunk_overlap: int | None = None
     image_description_concurrency: int | None = None
+    image_description_batch_size: int | None = None
     image_description_timeout_seconds: int | None = None
 
 
 @router.get("/knowledge-bases/rag-pipelines/llamaindex/config")
 async def get_llamaindex_pipeline_config():
-    """Read the LlamaIndex engine's retrieval + chunking knobs."""
+    """Read the LlamaIndex engine's retrieval + chunking knobs.
+
+    ``retrieval_profile`` is what is *configured*; ``effective_retrieval_profile``
+    is what would actually run — a hybrid configuration degrades to vector-only
+    when the BM25 package is missing (e.g. Python 3.14 installs, #1792).
+    """
     try:
         from deeptutor.services.config import get_runtime_settings_service
 
-        return get_runtime_settings_service().load_llamaindex()
+        settings = get_runtime_settings_service().load_llamaindex()
+        from deeptutor.services.rag.pipelines.llamaindex.retrievers import (
+            effective_retrieval_profile,
+        )
+
+        payload = dict(settings)
+        payload["effective_retrieval_profile"] = effective_retrieval_profile(
+            settings.get("retrieval_profile")
+        )
+        return payload
     except Exception as e:
         logger.error(f"Error reading LlamaIndex config: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -2507,6 +2585,99 @@ class ConnectImaRequest(BaseModel):
     knowledge_base_id: str
 
 
+class KiwixConnectionRequest(BaseModel):
+    server_url: str
+    zim_name: str
+
+
+class ConnectKiwixRequest(KiwixConnectionRequest):
+    name: str
+
+
+@router.get("/knowledge-bases/kiwix-catalog", dependencies=[Depends(require_admin)])
+async def list_kiwix_catalog(
+    server_url: str = Query(min_length=1, max_length=2048),
+    q: str = Query(default="", max_length=100),
+) -> dict[str, Any]:
+    """List exact ZIM names from legacy OPDS; v2 can omit loaded archives."""
+    from deeptutor.services.rag.pipelines.kiwix.client import KiwixClient, KiwixError
+
+    try:
+        archives = await KiwixClient.list_archives(server_url, q)
+    except KiwixError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "archives": [{"zim_name": archive.zim_name, "title": archive.title} for archive in archives]
+    }
+
+
+@router.post("/knowledge-bases/probe-kiwix", dependencies=[Depends(require_admin)])
+async def probe_kiwix_route(payload: KiwixConnectionRequest) -> dict[str, Any]:
+    """Verify that one archive is readable without copying its ZIM file."""
+    from deeptutor.services.rag.pipelines.kiwix.client import KiwixClient, KiwixError
+
+    try:
+        client = KiwixClient(payload.server_url, payload.zim_name)
+        title = await client.probe()
+    except KiwixError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"ok": True, "zim_name": client.zim_name, "title": title}
+
+
+@router.post("/knowledge-bases/connect-kiwix", dependencies=[Depends(require_admin)])
+async def connect_kiwix_route(payload: ConnectKiwixRequest) -> dict[str, Any]:
+    """Bind a KB to a kiwix-serve archive; no ingest or index is created."""
+    from deeptutor.services.rag.pipelines.kiwix.client import KiwixClient, KiwixError
+
+    try:
+        client = KiwixClient(payload.server_url, payload.zim_name)
+        title = await client.probe()
+        manager = get_kb_manager()
+        entry = manager.register_kiwix_kb(
+            payload.name,
+            client.base_url,
+            client.zim_name,
+            zim_title=title,
+        )
+    except (KiwixError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "status": "connected",
+        "name": payload.name,
+        "zim_name": entry["zim_name"],
+        "title": entry["zim_title"],
+        "rag_provider": entry["rag_provider"],
+    }
+
+
+@router.get("/knowledge-bases/kiwix-articles")
+async def search_kiwix_articles(
+    kb_ref: str = Query(min_length=1, max_length=300),
+    q: str = Query(min_length=1, max_length=500),
+) -> dict[str, Any]:
+    """List bounded article matches for Knowledge Center and Reading import."""
+    from deeptutor.multi_user.knowledge_access import resolve_kb_metadata
+    from deeptutor.tools.rag_tool import rag_search
+
+    entry = resolve_kb_metadata(kb_ref)
+    if not entry or entry.get("type") != "kiwix":
+        raise HTTPException(status_code=404, detail="Kiwix knowledge base not found.")
+    result = await rag_search(q, kb_ref, top_k=10)
+    if result.get("error_type"):
+        raise HTTPException(status_code=502, detail=result.get("answer") or "Kiwix search failed.")
+    return {
+        "articles": [
+            {
+                "title": source.get("title") or "",
+                "article_path": source.get("article_path") or "",
+                "excerpt": str(source.get("content") or "")[:500],
+            }
+            for source in result.get("sources") or []
+            if isinstance(source, dict) and source.get("article_path")
+        ]
+    }
+
+
 @router.post("/knowledge-bases/probe-ima")
 async def probe_ima_route(payload: ProbeImaRequest):
     """Test-connect to a Tencent IMA knowledge base before binding a KB to it.
@@ -2625,11 +2796,21 @@ def _resource_knowledge_bases() -> list[KnowledgeBaseInfo]:
 
 @router.get("/knowledge-bases", response_model=list[KnowledgeBaseInfo])
 async def list_knowledge_bases():
+    """Disk probes must not block the async worker or its other requests (#1711)."""
+    return await asyncio.to_thread(_list_knowledge_bases)
+
+
+def _list_knowledge_bases():
     """List all available knowledge bases with their details."""
+    from deeptutor.services.workspace.context import current_workspace_id
     from deeptutor.services.workspace.knowledge import library_request
     from deeptutor.services.workspace.resources import current_resources
 
-    if library_request.get() or current_resources().knowledge_bases is not None:
+    if (
+        library_request.get()
+        or current_resources().knowledge_bases is not None
+        or current_workspace_id()
+    ):
         return _resource_knowledge_bases()
     try:
         manager = get_kb_manager()
@@ -2798,6 +2979,21 @@ async def list_knowledge_bases():
         error_msg = f"Error listing knowledge bases: {e}"
         logger.error(f"{error_msg}\n{traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"Failed to list knowledge bases: {e!s}")
+
+
+@router.get(
+    "/knowledge-bases/list",
+    response_model=list[KnowledgeBaseInfo],
+    include_in_schema=False,
+)
+async def list_knowledge_bases_proxy_alias():
+    """Proxy-safe alias for the KB list.
+
+    The collection URL is reserved by the frontend's streaming multipart
+    create route, which bypasses Next's request-buffering proxy. Browser list
+    requests use this path so GET traffic can use the normal backend rewrite.
+    """
+    return await list_knowledge_bases()
 
 
 @router.get("/knowledge-bases/{kb_name}")
@@ -2978,6 +3174,9 @@ async def move_kb_file(kb_name: str, payload: MoveFilePayload):
 
     dest_dir.mkdir(parents=True, exist_ok=True)
     shutil.move(str(src), str(dest))
+    VisualAssetStore(manager.get_knowledge_base_path(kb_name)).move_source(
+        source_rel, dest.relative_to(raw_dir.resolve()).as_posix()
+    )
     return {"status": "ok", "path": dest.relative_to(raw_dir.resolve()).as_posix()}
 
 
@@ -3020,6 +3219,81 @@ async def serve_kb_raw_file(kb_name: str, filename: str):
     )
 
 
+@router.get("/knowledge-bases/{kb_name}/visual-assets/{asset_id}")
+async def serve_kb_visual_asset(kb_name: str, asset_id: str):
+    """Serve a verified source image from an access checked local KB."""
+    raw_dir = _resolve_kb_raw_dir(kb_name)
+    assert raw_dir is not None
+    loaded = VisualAssetStore(raw_dir.parent).read(asset_id)
+    if loaded is None:
+        raise HTTPException(status_code=404, detail="Visual asset not found")
+    record, data = loaded
+    from deeptutor.services.rag.source_visuals import source_state
+
+    if source_state(raw_dir.parent, record) in {"changed", "missing"}:
+        raise HTTPException(
+            status_code=409,
+            detail="The referenced source changed or is missing. Select its current version explicitly.",
+        )
+    return Response(
+        content=data,
+        media_type=record["mime_type"],
+        headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"},
+    )
+
+
+@router.get("/knowledge-bases/{kb_name}/visual-coverage")
+async def kb_visual_coverage(
+    kb_name: str,
+    source_path: str = "",
+    offset: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=200),
+):
+    from deeptutor.services.rag.visual_coverage import coverage_overview
+
+    raw_dir = _resolve_kb_raw_dir(kb_name)
+    assert raw_dir is not None
+    try:
+        return await asyncio.to_thread(
+            coverage_overview, raw_dir.parent, source_path=source_path, offset=offset, limit=limit
+        )
+    except (OSError, ValueError) as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="Visual coverage is unreadable; original evidence files have been preserved.",
+        ) from exc
+
+
+@router.get("/knowledge-bases/{kb_name}/source-page")
+async def kb_source_page(
+    kb_name: str,
+    source_path: str,
+    page: int = Query(..., ge=1),
+    source_hash: str = "",
+    region: str = "",
+):
+    from deeptutor.services.rag.source_visuals import page_image
+
+    raw_dir = _resolve_kb_raw_dir(kb_name)
+    assert raw_dir is not None
+    try:
+        crop = [float(value) for value in region.split(",")] if region else None
+        record, image = await asyncio.to_thread(
+            page_image, raw_dir.parent, source_path, page, expected_hash=source_hash, region=crop
+        )
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return Response(
+        content=image,
+        media_type=record["mime_type"],
+        headers={
+            "Cache-Control": "private, no-store",
+            "X-Content-Type-Options": "nosniff",
+            "X-Source-Document-ID": record["source_document_id"],
+        },
+    )
+
+
 @router.delete("/knowledge-bases/{kb_name}/files/{filename:path}")
 async def delete_kb_file(kb_name: str, filename: str):
     """Remove a single raw document from a knowledge base.
@@ -3045,6 +3319,7 @@ async def delete_kb_file(kb_name: str, filename: str):
             kb_name,
             target.name,
         )
+    VisualAssetStore(kb_dir).remove_source(target.relative_to(kb_dir / "raw").as_posix())
     removal = remove_raw_document(Path(kb_dir), target)
     return {
         "status": "ok",
@@ -3211,6 +3486,7 @@ async def upload_files(
             task_id=task_id,
             rag_provider=kb_provider,
             owner=get_current_user(),
+            storage_workspace_id=workspace_id_for_kb_base_dir(kb_base_dir),
         )
 
         return {
@@ -3239,35 +3515,71 @@ async def create_knowledge_base(
     rel_paths: list[str] = Form(None),
     indexing_llm: str = Form(""),
     embedding_model: str = Form(""),
+    storage_workspace_id: str | None = Form(None),
 ):
     from contextlib import nullcontext
 
     from deeptutor.services.rag.pipelines.lightrag.indexing_policy import IndexingPolicyError
     from deeptutor.services.rag.pipelines.lightrag.write_lock import write_ownership
+    from deeptutor.services.workspace.context import workspace_context
+    from deeptutor.services.workspace.knowledge import (
+        canonical_kb_id,
+        library_request,
+        qualified_kb_id,
+    )
+    from deeptutor.services.workspace.models import WorkspaceError
 
+    # Direct SDK/test callers receive FastAPI's Form marker when this optional
+    # field is omitted; only an actual submitted string selects a destination.
+    if not isinstance(storage_workspace_id, str):
+        storage_workspace_id = None
     try:
         valid_name = validate_knowledge_base_name(name)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    ownership = (
-        write_ownership(_current_kb_base_dir() / valid_name)
-        if rag_provider == LIGHTRAG_PROVIDER
-        else nullcontext()
-    )
     try:
-        with ownership:
-            return await _create_knowledge_base_owned(
-                background_tasks,
-                name,
-                files,
-                rag_provider,
-                pageindex_mode,
-                search_mode,
-                rel_paths,
-                indexing_llm,
-                embedding_model,
-            )
+        scope_manager = (
+            workspace_context(storage_workspace_id)
+            if storage_workspace_id is not None
+            else nullcontext()
+        )
+        with scope_manager as selected_scope:
+            token = library_request.set(False) if storage_workspace_id is not None else None
+            try:
+                if selected_scope is not None and selected_scope.archived:
+                    raise WorkspaceError(
+                        "Restore the storage workspace before creating a knowledge base."
+                    )
+                from deeptutor.services.workspace.context import current_workspace_id
+
+                resource_id = qualified_kb_id(valid_name, current_workspace_id())
+                if canonical_kb_id(resource_id) != resource_id:
+                    raise WorkspaceError("This knowledge base ID is reserved by an earlier move.")
+                ownership = (
+                    write_ownership(_current_kb_base_dir() / valid_name)
+                    if rag_provider == LIGHTRAG_PROVIDER
+                    else nullcontext()
+                )
+                with ownership:
+                    result = await _create_knowledge_base_owned(
+                        background_tasks,
+                        name,
+                        files,
+                        rag_provider,
+                        pageindex_mode,
+                        search_mode,
+                        rel_paths,
+                        indexing_llm,
+                        embedding_model,
+                    )
+                result["id"] = resource_id
+                return result
+            finally:
+                if token is not None:
+                    library_request.reset(token)
     except IndexingPolicyError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except WorkspaceError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 
@@ -3457,7 +3769,14 @@ async def _create_knowledge_base_owned(
             total=len(uploaded_files),
         )
 
-        background_tasks.add_task(run_initialization_task, initializer, task_id)
+        from deeptutor.services.workspace.context import current_workspace_id
+
+        background_tasks.add_task(
+            run_initialization_task,
+            initializer,
+            task_id,
+            storage_workspace_id=current_workspace_id(),
+        )
 
         logger.info(f"KB '{name}' created, processing {len(uploaded_files)} files in background")
 
@@ -3485,6 +3804,7 @@ async def run_reindex_task(
     owner=None,
     embedding_selection=None,
     embedding_config=None,
+    storage_workspace_id: str | None = None,
 ) -> None:
     """Re-index a KB's raw documents with its selected embedding configuration.
 
@@ -3503,9 +3823,29 @@ async def run_reindex_task(
                 indexing_snapshot=indexing_snapshot,
                 embedding_selection=embedding_selection,
                 embedding_config=embedding_config,
+                storage_workspace_id=storage_workspace_id,
             )
         finally:
             reset_current_user(token)
+
+    if storage_workspace_id is not None:
+        from deeptutor.services.workspace.context import workspace_context
+        from deeptutor.services.workspace.knowledge import library_request
+
+        with workspace_context(storage_workspace_id):
+            token = library_request.set(False)
+            try:
+                return await run_reindex_task(
+                    kb_name=kb_name,
+                    base_dir=base_dir,
+                    task_id=task_id,
+                    signature_hash=signature_hash,
+                    indexing_snapshot=indexing_snapshot,
+                    embedding_selection=embedding_selection,
+                    embedding_config=embedding_config,
+                )
+            finally:
+                library_request.reset(token)
 
     task_manager = TaskIDManager.get_instance()
     task_stream_manager = get_task_stream_manager()
@@ -3661,6 +4001,7 @@ async def run_reindex_task(
                     manager._save_config()
 
             success = await rag_service.initialize(
+                task_id=task_id,
                 kb_name=kb_name,
                 file_paths=file_paths,
                 progress_callback=_on_progress,
@@ -3725,8 +4066,16 @@ async def run_reindex_task(
                     error=error_msg,
                     **failure_metadata,
                 )
-            except Exception:
-                pass
+            except Exception as progress_err:
+                # The task-level error above stays authoritative; degrade loudly
+                # instead of silently, so a stale KB progress view is explainable.
+                logger.warning(
+                    "[%s] Re-index of '%s' failed, and persisting its error progress "
+                    "also failed (%s); the KB progress view may stay stale.",
+                    task_id,
+                    kb_name,
+                    progress_err,
+                )
             task_stream_manager.emit_failed(task_id, error_msg, **failure_metadata)
 
 
@@ -3765,6 +4114,20 @@ async def reindex_knowledge_base(
         kb_entry = _load_kb_entry_or_404(manager, kb_name)
         _assert_not_connected_kb(kb_name, kb_entry)
         force_reindex = str(kb_entry.get("status") or "").lower() == "error"
+        from deeptutor.knowledge.indexing_run import visible_run
+
+        previous_run = visible_run(kb_base_dir / kb_name)
+        if previous_run:
+            if previous_run["state"] == "running":
+                raise HTTPException(
+                    status_code=409, detail="An indexing worker still owns this knowledge base."
+                )
+            force_reindex = force_reindex or previous_run["state"] in {
+                "partial",
+                "failed",
+                "cancelled",
+                "interrupted",
+            }
         kb_provider = _validate_registered_provider(
             kb_entry.get("rag_provider") or DEFAULT_PROVIDER
         )
@@ -3890,6 +4253,7 @@ async def reindex_knowledge_base(
             signature_hash=signature_hash,
             indexing_snapshot=indexing_snapshot,
             owner=get_current_user(),
+            storage_workspace_id=workspace_id_for_kb_base_dir(kb_base_dir),
             **(
                 {"embedding_selection": embedding_selection, "embedding_config": embedding_config}
                 if embedding_selection
@@ -3959,6 +4323,59 @@ async def retry_knowledge_base(
         raise HTTPException(status_code=500, detail=format_exception_message(e))
 
 
+@router.get("/knowledge-bases/{kb_name}/indexing-run")
+async def get_indexing_run(kb_name: str):
+    """Pure durable diagnostics; reading never recreates a task or retries work."""
+    from deeptutor.knowledge.indexing_run import visible_run
+
+    resource = resolve_kb(kb_name)
+    return {"run": visible_run(resource.base_dir / resource.name)}
+
+
+@router.post("/knowledge-bases/{kb_name}/indexing-run/{task_id}/cancel")
+async def cancel_indexing_run(kb_name: str, task_id: str):
+    from deeptutor.knowledge.indexing_run import request_cancel
+
+    _, name, base_dir = _writable_kb(kb_name)
+    if not request_cancel(base_dir / name, task_id):
+        raise HTTPException(status_code=409, detail="This indexing run is no longer active.")
+    return {
+        "cancel_requested": True,
+        "message": "Cancellation takes effect at the next safe boundary; completed parser outputs remain reusable.",
+    }
+
+
+@router.get("/knowledge-bases/{kb_name}/indexing-readiness")
+async def get_indexing_readiness(kb_name: str):
+    from deeptutor.services.embedding.config import get_embedding_config
+    from deeptutor.services.parsing import get_parse_service
+    from deeptutor.services.parsing.engines.factory import get_parser
+
+    resource = resolve_kb(kb_name)
+    engine = get_parse_service().active_engine()
+    parser = get_parser(engine)
+    config = parser.resolve_config()
+    report = parser.is_ready(config)
+    embedding = get_embedding_config()
+    return {
+        "parser": engine,
+        "ready": report.ready,
+        "reason": report.reason,
+        "message": report.message,
+        "formats": sorted(parser.supported_formats()),
+        "mode": getattr(config, "mode", None),
+        "device": getattr(config, "device", None),
+        "embedding_model": embedding.model,
+        "embedding_configured": bool(embedding.model),
+        "source_count": len(
+            FileTypeRouter.collect_supported_files(
+                resource.base_dir / resource.name / "raw", recursive=True
+            )
+        ),
+        "note": "Readiness checks configuration and local prerequisites; runtime downloads, resource limits and provider responses can still fail.",
+    }
+
+
 @router.get("/knowledge-bases/{kb_name}/progress")
 async def get_progress(kb_name: str):
     """Get initialization progress for a knowledge base"""
@@ -3989,6 +4406,23 @@ async def clear_progress(kb_name: str):
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+def _progress_age_seconds(timestamp: object) -> float | None:
+    """Age of a progress snapshot timestamp in seconds, ``None`` if unknown.
+
+    A malformed timestamp means freshness cannot be determined; callers fall
+    back to their inactive/stale handling, and the anomaly is logged so a
+    corrupt snapshot cannot silently disable liveness detection.
+    """
+    if not timestamp:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(timestamp))
+        return (datetime.now() - parsed).total_seconds()
+    except (TypeError, ValueError) as exc:
+        logger.warning("Cannot determine progress age from timestamp %r: %s", timestamp, exc)
+        return None
 
 
 @ws_router.websocket("/knowledge-bases/{kb_name}/progress")
@@ -4117,16 +4551,17 @@ async def websocket_progress(websocket: WebSocket, kb_name: str):
         # Fast path: no active task — send current state and close immediately
         # This prevents infinite polling loops for ready or legacy KBs.
         has_active_task = False
+        initial_ts: object = None
+        initial_age_seconds: float | None = None
         if initial_progress:
             stage = initial_progress.get("stage")
             if stage not in ("completed", "error", None):
                 ts = initial_progress.get("timestamp")
                 if ts:
-                    try:
-                        age = (datetime.now() - datetime.fromisoformat(ts)).total_seconds()
-                        has_active_task = age < 120
-                    except Exception:
-                        pass
+                    initial_ts = ts
+                    initial_age_seconds = _progress_age_seconds(ts)
+                    if initial_age_seconds is not None:
+                        has_active_task = initial_age_seconds < 120
 
         if not has_active_task and not expected_task_id:
             if kb_is_ready:
@@ -4168,14 +4603,16 @@ async def websocket_progress(websocket: WebSocket, kb_name: str):
             elif stage == "error" or not kb_is_ready:
                 should_send = True
             elif stage != "completed" and timestamp:
-                try:
-                    progress_time = datetime.fromisoformat(timestamp)
-                    now = datetime.now()
-                    age_seconds = (now - progress_time).total_seconds()
-                    if age_seconds < 300:
-                        should_send = True
-                except Exception:
-                    pass
+                # The same snapshot timestamp may already have been assessed
+                # above; reuse that result so one corrupt timestamp yields one
+                # warning instead of one per freshness check.
+                age_seconds = (
+                    initial_age_seconds
+                    if timestamp is initial_ts
+                    else _progress_age_seconds(timestamp)
+                )
+                if age_seconds is not None and age_seconds < 300:
+                    should_send = True
 
             if should_send:
                 await websocket.send_json({"type": "progress", "data": initial_progress})
@@ -4252,19 +4689,24 @@ async def websocket_progress(websocket: WebSocket, kb_name: str):
         logger.debug(f"Progress WS error: {e}")
         try:
             await websocket.send_json({"type": "error", "message": str(e)})
-        except Exception:
-            pass
+        except Exception as send_error:
+            # Usually a client that is already gone; trace it so a genuinely
+            # broken send path cannot vanish.
+            logger.debug("Failed to deliver error frame on progress WS: %s", send_error)
     finally:
         await broadcaster.disconnect(subscription_key, websocket)
         try:
             await websocket.close()
-        except Exception:
-            pass
+        except Exception as close_error:
+            # Closing an already-disconnected socket is expected; keep a trace
+            # for anything else.
+            logger.debug("Failed to close progress WS: %s", close_error)
         if user_token is not None:
             try:
                 reset_current_user(user_token)
-            except Exception:
-                pass
+            except Exception as reset_error:
+                # Leaking the user context is a real fault, not a disconnect.
+                logger.warning("Failed to reset user context after progress WS: %s", reset_error)
 
 
 @router.post("/knowledge-bases/{kb_name}/link-folder", response_model=LinkedFolderInfo)
@@ -4409,6 +4851,7 @@ async def sync_folder(kb_name: str, folder_id: str, background_tasks: Background
             folder_id=folder_id,  # Pass folder_id to update state on success
             folder_root=folder_path,  # Preserve each file's path relative to this root
             owner=get_current_user(),
+            storage_workspace_id=workspace_id_for_kb_base_dir(kb_base_dir),
         )
 
         return SyncFolderResponse(
@@ -4456,6 +4899,18 @@ class AddWebSourceRequest(BaseModel):
     max_pages: int = Field(default=200, ge=1, le=200)
 
 
+class BilingualPairingInfo(BaseModel):
+    pairing_id: str
+    source_url: str
+    target_url: str
+    source_file: str = ""
+    target_file: str = ""
+    source_lang: str = ""
+    target_lang: str = ""
+    pairing_method: str = "hreflang"
+    updated_at: int = 0
+
+
 class WebSourceInfo(BaseModel):
     id: str
     url: str
@@ -4470,6 +4925,7 @@ class WebSourceInfo(BaseModel):
     last_sync_error: str | None = None
     added_at: str = ""
     navigation: dict | None = None
+    bilingual_pairings: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class WebSourceScheduleUpdate(BaseModel):
@@ -4608,6 +5064,33 @@ async def get_web_source_sync_jobs(kb_name: str):
         scheduler = get_web_source_sync_scheduler()
         jobs = scheduler.repo.list_jobs(get_current_user().id, resolved_name)
         return [WebSourceSyncJobInfo(**job.public_dict()) for job in jobs]
+
+
+@router.get(
+    "/knowledge-bases/{kb_name}/web-source/{source_id}/pairings",
+    response_model=list[BilingualPairingInfo],
+)
+async def get_web_source_pairings(kb_name: str, source_id: str):
+    with _knowledge_source_errors(kb_name):
+        manager, resolved_name, _ = _writable_kb(kb_name)
+        source = next(
+            (
+                item
+                for item in manager.get_web_sources(resolved_name)
+                if item.get("id") == source_id
+            ),
+            None,
+        )
+        if source is None:
+            raise HTTPException(status_code=404, detail=f"Source '{source_id}' not found")
+        scheduler = get_web_source_sync_scheduler()
+        repo_pairings = scheduler.repo.list_pairings(
+            get_current_user().id, resolved_name, source_id
+        )
+        if repo_pairings:
+            return [BilingualPairingInfo(**p.public_dict()) for p in repo_pairings]
+        meta_pairings = source.get("bilingual_pairings") or []
+        return [BilingualPairingInfo(**p) for p in meta_pairings]
 
 
 @router.put(

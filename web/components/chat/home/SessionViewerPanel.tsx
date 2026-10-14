@@ -1,5 +1,7 @@
 "use client";
 
+import TaskPanelSection from "@/components/tasks/TaskPanelSection";
+
 import { browserStorage } from "@/shared/storage";
 
 /**
@@ -65,6 +67,7 @@ import type { GeogebraTabPayload } from "@/context/GeogebraTabContext";
 import { apiUrl } from "@/lib/api";
 import type { MessageAttachment } from "@/features/chat/ChatStateAdapter";
 import type { StreamEvent } from "@/features/chat/model/protocol";
+import Tooltip from "@/shared/ui/Tooltip";
 import {
   normalizeSelectedText,
   selectionTutorKey,
@@ -220,6 +223,8 @@ export interface SessionViewerPanelProps {
   activity: SessionActivity;
   /** Optional capability-config card appended below the activity sections. */
   configSection?: ReactNode;
+  taskDraftIds?: string[];
+  onTaskDraftChange?: (ids: string[]) => void;
 }
 
 function fileTabIdFor(a: MessageAttachment, fallback: number): string {
@@ -284,6 +289,8 @@ function SessionViewerPanelInner(
     onAutoOpen,
     activity,
     configSection,
+    taskDraftIds,
+    onTaskDraftChange,
   }: SessionViewerPanelProps,
   ref: React.Ref<SessionViewerPanelHandle>,
 ) {
@@ -801,6 +808,9 @@ function SessionViewerPanelInner(
           />
         ) : (
           <ActivityHome
+            sessionId={sessionId}
+            taskDraftIds={taskDraftIds}
+            onTaskDraftChange={onTaskDraftChange}
             activity={activity}
             open={visible}
             configSection={configSection}
@@ -870,7 +880,6 @@ function TabBar({
           onClick={onSelectHome}
           aria-pressed={homeActive}
           className={`${TAB_PILL} ${TAB_FOCUS} gap-1.5 px-2.5 ${homeActive ? TAB_ACTIVE : TAB_IDLE}`}
-          title={t("Activity")}
         >
           <Activity size={13} strokeWidth={1.8} className="shrink-0" />
           <span>{t("Activity")}</span>
@@ -895,30 +904,32 @@ function TabBar({
             <div
               key={tab.id}
               className={`group ${TAB_PILL} max-w-[190px] ${active ? TAB_ACTIVE : TAB_IDLE}`}
-              title={tab.label}
             >
               <button
                 type="button"
                 onClick={() => onSelect(tab.id)}
                 aria-pressed={active}
+                aria-label={tab.label}
                 className={`inline-flex h-full min-w-0 flex-1 items-center gap-1.5 rounded-lg pl-2.5 pr-1 text-left ${TAB_FOCUS}`}
               >
                 <Icon size={13} strokeWidth={1.8} className="shrink-0" />
                 <span className="truncate">{tab.label}</span>
               </button>
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onCloseTab(tab.id);
-                }}
-                className={`mr-1 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-[var(--muted-foreground)] transition-[opacity,background-color,color] hover:bg-[color-mix(in_srgb,var(--foreground)_8%,transparent)] hover:text-[var(--foreground)] focus-visible:opacity-100 ${TAB_FOCUS} ${
-                  active ? "opacity-70" : "opacity-0 group-hover:opacity-70"
-                }`}
-                aria-label={t("Close tab")}
-              >
-                <X size={12} strokeWidth={2} />
-              </button>
+              <Tooltip label={t("Close tab")} side="bottom">
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onCloseTab(tab.id);
+                  }}
+                  className={`mr-1 inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-md text-[var(--muted-foreground)] transition-[opacity,background-color,color] hover:bg-[color-mix(in_srgb,var(--foreground)_8%,transparent)] hover:text-[var(--foreground)] focus-visible:opacity-100 ${TAB_FOCUS} ${
+                    active ? "opacity-70" : "opacity-0 group-hover:opacity-70"
+                  }`}
+                  aria-label={t("Close tab")}
+                >
+                  <X size={12} strokeWidth={2} />
+                </button>
+              </Tooltip>
             </div>
           );
         })}
@@ -932,24 +943,26 @@ function TabBar({
           />
         </>
       ) : null}
-      <button
-        type="button"
-        onClick={onNewTab}
-        className={HEADER_ICON}
-        aria-label={t("New tab")}
-        title={t("New tab")}
-      >
-        <Plus size={16} strokeWidth={1.8} />
-      </button>
-      <button
-        type="button"
-        onClick={onClosePanel}
-        className={HEADER_ICON}
-        aria-label={t("Close viewer")}
-        title={t("Close viewer")}
-      >
-        <X size={15} strokeWidth={1.8} />
-      </button>
+      <Tooltip label={t("New tab")} side="bottom">
+        <button
+          type="button"
+          onClick={onNewTab}
+          className={HEADER_ICON}
+          aria-label={t("New tab")}
+        >
+          <Plus size={16} strokeWidth={1.8} />
+        </button>
+      </Tooltip>
+      <Tooltip label={t("Close viewer")} side="bottom">
+        <button
+          type="button"
+          onClick={onClosePanel}
+          className={HEADER_ICON}
+          aria-label={t("Close viewer")}
+        >
+          <X size={15} strokeWidth={1.8} />
+        </button>
+      </Tooltip>
     </div>
   );
 }
@@ -965,6 +978,9 @@ function TabBar({
  * this same panel.
  */
 function ActivityHome({
+  sessionId,
+  taskDraftIds,
+  onTaskDraftChange,
   activity,
   open,
   configSection,
@@ -972,6 +988,9 @@ function ActivityHome({
   onOpenWebTab,
   onOpenLocalFile,
 }: {
+  sessionId: string | null;
+  taskDraftIds?: string[];
+  onTaskDraftChange?: (ids: string[]) => void;
   activity: SessionActivity;
   open: boolean;
   configSection?: ReactNode;
@@ -981,6 +1000,11 @@ function ActivityHome({
 }) {
   return (
     <div className="h-full space-y-5 overflow-y-auto px-3 pb-8 pt-1 sm:px-3.5">
+      <TaskPanelSection
+        sessionId={sessionId}
+        draftTaskIds={taskDraftIds}
+        onDraftChange={onTaskDraftChange}
+      />
       <ActivityBody
         activity={activity}
         open={open}
@@ -1128,28 +1152,30 @@ function FileTabActions({ source }: { source: FilePreviewSource }) {
   return (
     <>
       {fileUrl ? (
-        <a
-          href={fileUrl}
-          download={filename}
-          className={HEADER_ICON}
-          aria-label={t("Download")}
-          title={t("Download")}
-        >
-          <Download size={15} strokeWidth={1.8} />
-        </a>
+        <Tooltip label={t("Download")} side="bottom">
+          <a
+            href={fileUrl}
+            download={filename}
+            className={HEADER_ICON}
+            aria-label={t("Download")}
+          >
+            <Download size={15} strokeWidth={1.8} />
+          </a>
+        </Tooltip>
       ) : null}
-      <button
-        type="button"
-        onClick={() => {
-          if (fileUrl) window.open(fileUrl, "_blank", "noopener,noreferrer");
-        }}
-        disabled={!fileUrl}
-        className={HEADER_ICON}
-        aria-label={t("Open in browser")}
-        title={t("Open in browser")}
-      >
-        <ExternalLink size={14} strokeWidth={1.8} />
-      </button>
+      <Tooltip label={t("Open in browser")} side="bottom">
+        <button
+          type="button"
+          onClick={() => {
+            if (fileUrl) window.open(fileUrl, "_blank", "noopener,noreferrer");
+          }}
+          disabled={!fileUrl}
+          className={HEADER_ICON}
+          aria-label={t("Open in browser")}
+        >
+          <ExternalLink size={14} strokeWidth={1.8} />
+        </button>
+      </Tooltip>
     </>
   );
 }

@@ -89,6 +89,9 @@ class KnowledgePoint(BaseModel):
     # Selected non-goal sources that justify this objective. They are curriculum
     # provenance, not proof of factual correctness or retrieval permission.
     topic_source_ids: list[str] = Field(default_factory=list)
+    required_visual_tasks: list[
+        Literal["identification", "relationship", "table_graph", "comparison"]
+    ] = Field(default_factory=list)
 
 
 class LearningModule(BaseModel):
@@ -132,6 +135,8 @@ class QuizAttempt(BaseModel):
     # attempts are excluded from mastery, errors, and spaced repetition.
     voided: bool = False
     void_reason: str = ""
+    independent: bool = True
+    visual_context: dict[str, Any] = Field(default_factory=dict)
 
 
 class RetryAttempt(BaseModel):
@@ -181,6 +186,7 @@ class LearningEvidence(BaseModel):
     response_time: float | None = None
     session_id: str = ""
     turn_id: str = ""
+    visual_context: dict[str, Any] = Field(default_factory=dict)
 
 
 class RepetitionState(BaseModel):
@@ -267,6 +273,8 @@ class PendingQuestion(BaseModel):
     explanation: str = ""
     difficulty: str = ""
     created_at: float = Field(default_factory=time.time)
+    visual_context: dict[str, Any] = Field(default_factory=dict)
+    accepted_answers: list[str] = Field(default_factory=list)
 
     @field_validator("options", mode="before")
     @classmethod
@@ -445,7 +453,7 @@ class LearnerProfile(BaseModel):
     These are the things only the learner knows; the tutor can read the
     material's own difficulty for itself.
 
-    Every field is free text on purpose. The useful answer to "how much time do
+    Intake answers are free text on purpose. The useful answer to "how much time do
     you have" is "两周，每天晚上一小时", not an enum the learner has to be
     translated into. Empty means never asked, which is why nothing here is
     required: a goal created before intake existed reads as a profile with
@@ -465,6 +473,8 @@ class LearnerProfile(BaseModel):
     #: How they want it taught — language, worked examples over prose,
     #: intuition before formalism.
     preferences: str = ""
+    #: Explicit sequencing preference. Existing paths keep the diagnostic default.
+    teaching_strategy: Literal["probe_first", "teach_first"] = "probe_first"
     #: Anything else worth carrying that the four fields above do not hold.
     notes: str = ""
     updated_at: float = Field(default_factory=time.time)
@@ -477,6 +487,7 @@ class LearnerProfile(BaseModel):
                 self.target_level.strip(),
                 self.time_budget.strip(),
                 self.preferences.strip(),
+                self.teaching_strategy != "probe_first",
                 self.notes.strip(),
             )
         )
@@ -567,6 +578,7 @@ class LearningProgress(BaseModel):
     # Temporarily skipped objectives. These never count as mastered; routing
     # just prefers any other eligible waypoint until only deferred ones remain.
     deferred_objectives: dict[str, DeferredObjective] = Field(default_factory=dict)
+    explained_objectives: dict[str, dict[str, Any]] = Field(default_factory=dict)
     # A single outstanding question; grading reads its expected answer so the
     # model never has to recall it across turns.
     pending_question: PendingQuestion | None = None
