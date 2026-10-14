@@ -132,6 +132,13 @@ export interface ReaderPaneProps {
    * the narrowest thing on screen.
    */
   ownAnnotationList?: boolean;
+  /**
+   * Workspace mode: the annotation list lives in the SourceNavigator, which
+   * holds its own selection state. Reporting clicks here lets the navigator
+   * highlight the matching row — upstream kept one shared active id; the
+   * workspace split made them two states, so the click-to-list link broke.
+   */
+  onActiveAnnotationChange?: (annotationId: string | null) => void;
 }
 
 /**
@@ -164,6 +171,7 @@ export function ReaderPane({
   onToggleBookmark,
   onLocatorChange,
   ownAnnotationList = true,
+  onActiveAnnotationChange,
 }: ReaderPaneProps) {
   const { t, i18n } = useTranslation();
   // Document + annotations live in the provider (workspace layout), so they
@@ -185,6 +193,15 @@ export function ReaderPane({
 
   const [activeAnnotationId, setActiveAnnotationId] = useState<string | null>(
     null,
+  );
+  // Every activation also reaches the workspace shell, so the navigator's
+  // annotation rows light up in step with clicks inside the document.
+  const activateAnnotation = useCallback(
+    (annotationId: string | null) => {
+      setActiveAnnotationId(annotationId);
+      onActiveAnnotationChange?.(annotationId);
+    },
+    [onActiveAnnotationChange],
   );
   const [selection, setSelection] = useState<SelectionPayload | null>(null);
   // Whether the annotation popover is showing, kept apart from whether there
@@ -1162,7 +1179,7 @@ export function ReaderPane({
               highlightedAnnotationId={activeAnnotationId}
               onSelection={openSelection}
               onAnnotationClick={(annotation) =>
-                setActiveAnnotationId(annotation.annotation_id)
+                activateAnnotation(annotation.annotation_id)
               }
               onVisibleLocatorChange={handleVisibleLocator}
               onHeadingsChange={onHeadingsChange}
@@ -1179,7 +1196,7 @@ export function ReaderPane({
               highlightedAnnotationId={activeAnnotationId}
               onSelection={openSelection}
               onAnnotationClick={(annotation) =>
-                setActiveAnnotationId(annotation.annotation_id)
+                activateAnnotation(annotation.annotation_id)
               }
               onVisibleLocatorChange={handleVisibleLocator}
             />
@@ -1195,7 +1212,7 @@ export function ReaderPane({
               highlightedAnnotationId={activeAnnotationId}
               onSelection={openSelection}
               onAnnotationClick={(annotation) =>
-                setActiveAnnotationId(annotation.annotation_id)
+                activateAnnotation(annotation.annotation_id)
               }
               onVisibleLocatorChange={handleVisibleLocator}
               onHeadingsChange={onHeadingsChange}
@@ -1212,7 +1229,7 @@ export function ReaderPane({
               unit={material.unit}
               activeId={activeAnnotationId}
               onSelect={(annotation) => {
-                setActiveAnnotationId(annotation.annotation_id);
+                activateAnnotation(annotation.annotation_id);
                 requestJump(annotation.locator, annotation.quote || undefined);
               }}
               onDelete={(annotation) => void removeMark(annotation)}

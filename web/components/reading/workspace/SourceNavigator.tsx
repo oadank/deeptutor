@@ -54,6 +54,7 @@ export function SourceNavigator({
   onSearch,
   activeLocator,
   annotationCount,
+  highlightedAnnotationId,
   unitCount,
   open,
   onClose,
@@ -79,6 +80,12 @@ export function SourceNavigator({
   onSearch: (value: string) => void;
   activeLocator: number;
   annotationCount: number;
+  /**
+   * The row the reader clicked inside the document (mirrored up from
+   * ReaderPane). Local clicks win; this only fills the gap so a document
+   * click also lights up the matching row.
+   */
+  highlightedAnnotationId?: string | null;
   unitCount: number;
   open: boolean;
   onClose: () => void;
@@ -252,7 +259,7 @@ export function SourceNavigator({
           <AnnotationList
             annotations={reading.annotations}
             unit={reading.material?.unit ?? "page"}
-            activeId={activeAnnotationId}
+            activeId={activeAnnotationId ?? highlightedAnnotationId ?? null}
             onSelect={openAnnotation}
             onDelete={(annotation) => void reading.removeMark(annotation)}
           />

@@ -161,17 +161,25 @@ test("a rich text annotation reflows and activates its sidebar entry", async ({
     "# Light can behave like a wave\n\nand sometimes like a particle.",
   );
 
-  await page.setViewportSize({ width: 1100, height: 700 });
+  // 1440 keeps the contents drawer side-by-side (xl and up): below xl the
+  // drawer overlays the article with a click-away "Close panels" layer, which
+  // would swallow the annotation click at the end of this test.
+  await page.setViewportSize({ width: 1440, height: 900 });
   await expect(highlight).toBeVisible();
   await expect(highlight).toHaveAttribute("data-annotation", "annotation-1");
+
+  // Fork layout: the annotation list lives inside the contents drawer as its
+  // "Annotations" tab, not beside the companion. Open the drawer first —
+  // upstream kept the list permanently mounted next to the companion.
+  await page.getByRole("button", { name: "Expand contents", exact: true }).click();
+  const annotationsTab = page.getByRole("tab", { name: "Annotations" });
+  await expect(annotationsTab).toBeVisible();
+  await annotationsTab.click();
 
   const sidebarEntry = page
     .getByRole("button")
     .filter({ hasText: "Wave behavior" });
   await expect(sidebarEntry).toBeVisible();
-  await page.getByRole("button", { name: "Close reading companion" }).click();
-  await expect(page.getByRole("button", { name: "Expand contents", exact: true })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Close panels" })).toBeHidden();
   const article = page.locator("article.r6o-annotatable");
   const articleBox = await article.boundingBox();
   const highlightBox = await highlight.boundingBox();

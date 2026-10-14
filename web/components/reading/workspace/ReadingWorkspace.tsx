@@ -214,6 +214,13 @@ export function ReadingWorkspacePage() {
   }, []);
   const [showSessions, setShowSessions] = useState(false);
   const [showLinker, setShowLinker] = useState(false);
+  // The annotation row the reader last clicked inside the document. ReaderPane
+  // owns the click handling; the navigator's annotation list mirrors it so a
+  // document click lights up the matching row (upstream behaviour the
+  // workspace split had dropped).
+  const [activeAnnotationId, setActiveAnnotationId] = useState<string | null>(
+    null,
+  );
   // Stable: the companion hands it to the workspace ⋯ inside memoised items,
   // and a fresh arrow every render re-registered them forever.
   const openLinker = useCallback(() => setShowLinker(true), []);
@@ -637,6 +644,7 @@ export function ReadingWorkspacePage() {
               sourceHref: heading.sourceHref,
             }))
           }
+          highlightedAnnotationId={activeAnnotationId}
           refs={material?.unit_refs ?? []}
           transcript={material?.unit === "segment" ? transcript : []}
           transcriptUnavailable={transcriptUnavailable}
@@ -714,6 +722,7 @@ export function ReadingWorkspacePage() {
                 onLocatorChange={setActiveLocator}
                 headingJump={headingJump}
                 ownAnnotationList={false}
+                onActiveAnnotationChange={setActiveAnnotationId}
                 bookmarks={bookmarks}
                 onToggleBookmark={(locator, label) =>
                   void toggleBookmark(locator, label)
