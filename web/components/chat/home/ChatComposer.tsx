@@ -164,7 +164,7 @@ function CapMenuItem({
  * turn — send, working, stop — rather than two buttons that swap places at
  * the moment of the click. These are its four states; only the skin changes.
  */
-type SendState = "idle" | "blocked" | "ready";
+type SendState = "idle" | "blocked" | "ready" | "streaming";
 
 /**
  * `idle` keeps a legible glyph on a hairline ring instead of fading the whole
@@ -190,6 +190,7 @@ const SEND_STATE_CLASS: Record<SendState, string> = {
     "bg-[color-mix(in_srgb,var(--muted-foreground)_30%,transparent)] text-[var(--foreground)] hover:bg-[color-mix(in_srgb,var(--muted-foreground)_45%,transparent)]",
   ready:
     "bg-[var(--primary)] text-[var(--primary-foreground)] ring-[3px] ring-[color-mix(in_srgb,var(--primary)_18%,transparent)] hover:-translate-y-px hover:ring-[5px]",
+  streaming: "bg-[var(--primary)] text-[var(--primary-foreground)]",
 };
 
 export default memo(function ChatComposer({
@@ -792,11 +793,13 @@ export default memo(function ChatComposer({
   // `idle` so an empty composer doesn't present a live send affordance. That
   // makes intent — not `canSend` — the thing that decides interactivity, so
   // the `blocked` state can stay clickable and surface the config card.
-  const sendState: SendState = !hasIntent
-    ? "idle"
-    : isConfigBlocked
-      ? "blocked"
-      : "ready";
+  const sendState: SendState = streamingBlocksSend
+    ? "streaming"
+    : !hasIntent
+      ? "idle"
+      : isConfigBlocked
+        ? "blocked"
+        : "ready";
 
   const spaceSelectionCounts: SpaceSelectionCounts = {
     attachments: attachments.length,

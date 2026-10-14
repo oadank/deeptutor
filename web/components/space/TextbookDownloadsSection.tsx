@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { BookDown, MapPin, RefreshCw, Search } from "lucide-react";
+import { MapPin, RefreshCw, Search } from "lucide-react";
 
 import SpaceSectionHeader from "@/components/space/SpaceSectionHeader";
 import SimpleMarkdownRenderer from "@/components/common/SimpleMarkdownRenderer";
@@ -57,7 +57,6 @@ export default function TextbookDownloadsSection() {
   return (
     <div className="mx-auto w-full max-w-5xl px-4 py-6 md:px-6">
       <SpaceSectionHeader
-        icon={BookDown}
         title="教材下载"
         description="下载渠道与方法全国通用；先选你的省份查主流教材版本，再按版本逐册下载。"
         action={
