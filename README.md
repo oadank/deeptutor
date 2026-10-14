@@ -2,7 +2,7 @@
 
 # DeepTutor · 本机定制版（oadank fork）
 
-**上游**：[HKUDS/DeepTutor](https://github.com/HKUDS/DeepTutor)（v1.6.6 已合入）· 本 fork 在其之上持续叠加本地定制补丁
+**上游**：[HKUDS/DeepTutor](https://github.com/HKUDS/DeepTutor) · 本 fork 随时跟随上游最新版，并在其上持续叠加本地定制补丁
 
 </div>
 
@@ -52,6 +52,7 @@
 
 - **v1.6.5**：上游把 chat 管线重构成薄壳（逻辑上移 `agents/loop/`）。本 fork 的迁移：`_drain_user_injections`（注入式中断）挂回 `AgenticChatPipeline`；`tts_speak` 强制挂载迁入新共享模块 `_shared/tool_runtime.py`；`voice_policy` 提示块追加到上游 `foundation_blocks()` 之后；locale 文件语义化合并（本地 keys ∪ 上游 keys）。
 - **v1.6.6**：已合入。冲突主要在 README / locale JSON；chat 管线与 llm 层自动合并后逐项核对保活补丁。
+- **v1.6.14**（2026-10-14，一次跳三版）：18 文件 30 冲突块，"两侧各加各的"为主，无一行对撞。本机 embedding 补 catalog profile；上游把 `catalog.json` 改名 `model_catalog.json`，六个服务配置需重新登记。前端 `npm run build` 必须带 `DEEPTUTOR_NEXT_DIST_DIR=.next-deeptutor`。
 
 ## 部署形态（本机）
 
@@ -66,7 +67,7 @@
 
 ```bash
 git fetch origin --tags
-git merge v1.6.7   # 下一个版本
+git merge v1.6.15   # 当前上游最新版的下一个 tag，升级时先 git tag --sort=-v:refname 看一眼
 # 冲突原则：process.py 的 8MB 上限、trust 预注册、credentials 注入必须保留
 ```
 
