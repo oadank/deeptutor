@@ -81,20 +81,19 @@ import {
   leadingTraceEvents,
   type MessageSegment,
 } from "@/components/chat/home/AskUserOptions";
-import { MasteryQuestionCard } from "@/components/chat/home/MasteryQuestionCard";
 import {
+  collectMasteryAnswerRejections,
   collectMasteryGrades,
   collectMasterySkips,
   extractMasteryQuestion,
   type MasteryGradeResult,
+  type MasteryAnswerRejection,
   type MasteryQuestion,
 } from "@/lib/mastery-question";
 import { SetupCredentialCard } from "@/components/chat/home/SetupCredentialCard";
 import { extractSetupCredential } from "@/lib/setup-signals";
 import { PartnerDraftCard } from "@/components/chat/home/PartnerDraftCard";
 import { extractPartnerDraft } from "@/lib/partner-draft";
-import { CourseHandoffCards } from "@/components/chat/home/CourseHandoffCard";
-import { MasteryHandoffCards } from "@/components/chat/home/MasteryHandoffCard";
 import {
   extractCourseHandoffs,
   stripLeakedHandoffJson,
@@ -110,7 +109,7 @@ import {
 } from "@/features/chat/trace/TracePresentation";
 import { hasSettledFinalRound } from "@/features/chat/trace/selectors";
 import type { MessageTraceMetadata } from "@/features/chat/trace/memory";
-import type { OrphanedFailedTurn } from "@/lib/session-api";
+import { supportsSubmissionReplacement, type OrphanedFailedTurn } from "@/lib/session-api";
 import { agentGlyph } from "@/components/agents/agent-icons";
 import { useConsultationReference } from "@/hooks/useConsultationReference";
 import { useConnectedAgentKinds } from "@/hooks/useConnectedAgentKinds";
@@ -122,6 +121,21 @@ import {
 
 const MathAnimatorViewer = dynamic(
   () => import("@/components/math-animator/MathAnimatorViewer"),
+  { ssr: false },
+);
+const MasteryQuestionCard = dynamic(
+  () => import("@/components/chat/home/MasteryQuestionCard"), { ssr: false },
+);
+const MasterySourcePresentation = dynamic(
+  () => import("@/components/chat/home/MasterySourcePresentation").then(module => module.MasterySourcePresentation),
+  { ssr: false },
+);
+const CourseHandoffCards = dynamic(
+  () => import("@/components/chat/home/CourseHandoffCard").then(module => module.CourseHandoffCards),
+  { ssr: false },
+);
+const MasteryHandoffCards = dynamic(
+  () => import("@/components/chat/home/MasteryHandoffCard").then(module => module.MasteryHandoffCards),
   { ssr: false },
 );
 const QuizViewer = dynamic(() => import("@/components/quiz/QuizViewer"), {
@@ -153,6 +167,7 @@ interface ChatMessageItem {
   /** The server never accepted this submission (#1594) — rendered as an
    *  unsent message, not an ordinary sent one. */
   failedSubmission?: boolean;
+  failedSubmissionNeedsReview?: boolean;
   orphanedFailedTurn?: OrphanedFailedTurn;
 }
 
@@ -379,27 +394,38 @@ type MessageBlock =
  * Split a message into its blocks.
  *
  * A mastery question ends its turn, so the prose introducing it is teaching,
- * not commentary awaiting a later answer. Keep that text outside the fold as
- * well as the card. Earlier exploration and any intervening tool rows still
- * fold normally. Answered clarifications belong to the same process as the
+ * not commentary awaiting a later answer. Keep learner-facing text since the
+ * previous card outside the fold even when tool work separates its parts.
+ * Reasoning and tool payloads are trace segments and still fold normally.
+ * Answered clarifications belong to the same process as the
  * work before and after them; only pending cards stand outside the fold.
  */
 function buildMessageBlocks(
   segments: MessageSegment[],
   answerStart: number,
+  isMastery: boolean,
 ): MessageBlock[] {
   const teaching = new Set<number>();
-  segments.forEach((segment, index) => {
-    if (segment.kind !== "mastery_question") return;
+  const preserveTeachingBefore = (index: number) => {
     let before = index - 1;
-    // Recording a grade or updating state can share the round with the quiz.
-    // Those rows do not turn the preceding teaching into working notes.
     while (before >= 0 && segments[before].kind === "trace") before -= 1;
-    while (before >= 0 && segments[before].kind === "text") {
-      teaching.add(before);
+    // Later tool work cannot demote an already-written lesson into working
+    // notes in a Mastery turn. Ordinary chat preserves only the immediate
+    // introduction to its question, keeping earlier exploration folded.
+    while (before >= 0) {
+      const preceding = segments[before];
+      if (preceding.kind === "text") teaching.add(before);
+      else if (!isMastery || preceding.kind !== "trace") break;
       before -= 1;
     }
+  };
+  segments.forEach((segment, index) => {
+    if (segment.kind === "mastery_question") preserveTeachingBefore(index);
   });
+  // Keep Mastery teaching/feedback visible before an assessment arrives and
+  // when a turn ends with bookkeeping without posing an assessment at all.
+  // Explicitly retracted prose is already a trace, not a text segment.
+  if (isMastery) preserveTeachingBefore(segments.length);
   const blocks: MessageBlock[] = [];
   let run: MessageSegment[] = [];
   const flush = () => {
@@ -665,6 +691,7 @@ export const AssistantMessage = memo(function AssistantMessage({
   onTraceToggle,
   masteryGrades,
   masterySkips,
+  masteryAnswerRejections,
 }: {
   msg: {
     id?: number;
@@ -683,6 +710,7 @@ export const AssistantMessage = memo(function AssistantMessage({
   /** Every question the learner dropped, by id — collected the same way and
    *  for the same reason: the skip lands on a later turn than the card. */
   masterySkips?: Set<string>;
+  masteryAnswerRejections?: Map<string, MasteryAnswerRejection>;
   outlineStatus?: "editing" | "researching" | "done" | "failed";
   sessionId?: string | null;
   language?: string;
@@ -721,6 +749,7 @@ export const AssistantMessage = memo(function AssistantMessage({
   onAnswerMasteryQuestion?: (answer: {
     questionId: string;
     text: string;
+    answers?: Array<{ questionId: string; text: string }>;
   }) => void | boolean | Promise<void | boolean>;
   /** Drop a question the learner does not want to answer. Same turn-starting
    *  shape as answering it, because the engine holds one open question per
@@ -826,14 +855,16 @@ export const AssistantMessage = memo(function AssistantMessage({
         <MasteryQuestionCard
           question={question}
           grade={grade}
-          answered={Boolean(grade)}
+          answered={Boolean(grade) && grade?.complete !== false && grade?.final !== false}
           skipped={masterySkips?.has(question.questionId) ?? false}
           submittedAnswer={grade?.learnerAnswer ?? ""}
-          onSubmit={({ text }) =>
+          rejectionKey={!grade || grade.complete === false || grade.final === false ? masteryAnswerRejections?.get(question.questionId)?.retryKey : undefined}
+          onSubmit={({ text, answers }) =>
             onAnswerMasteryQuestion
               ? onAnswerMasteryQuestion({
                   questionId: question.questionId,
                   text: String(text ?? ""),
+                  ...(question.questionType === "group" ? { answers } : {}),
                 })
               : false
           }
@@ -845,6 +876,7 @@ export const AssistantMessage = memo(function AssistantMessage({
     [
       masteryGrades,
       masterySkips,
+      masteryAnswerRejections,
       onAnswerMasteryQuestion,
       onSkipMasteryQuestion,
   onChallengeMasteryQuestion,
@@ -976,8 +1008,8 @@ export const AssistantMessage = memo(function AssistantMessage({
   // Once answered, a clarification joins the surrounding process so resumed
   // work continues under the original activity header.
   const messageBlocks = useMemo(
-    () => buildMessageBlocks(messageSegments, answerStart),
-    [messageSegments, answerStart],
+    () => buildMessageBlocks(messageSegments, answerStart, msg.capability === "mastery_path"),
+    [messageSegments, answerStart, msg.capability],
   );
   // The leading run rides in the activity header, which is already pinned at
   // the top and already is a disclosure — giving it the process keeps the
@@ -1186,6 +1218,11 @@ export const AssistantMessage = memo(function AssistantMessage({
           events={events}
         />
       )}
+      {events.some(event => event.type === "sources" &&
+        Array.isArray(event.metadata.sources) && event.metadata.sources.some(source =>
+          source && typeof source === "object" &&
+          (source.presentation === "teaching" || source.presentation === "reveal"))) &&
+        <MasterySourcePresentation events={events} />}
       {/* Non-default branches (quiz, math animator, visualize) keep the
           card below the body. The default branch inlines it via
           ``messageSegments``; the research branch renders its own card
@@ -1206,8 +1243,8 @@ export const AssistantMessage = memo(function AssistantMessage({
       {partnerDraft ? <PartnerDraftCard data={partnerDraft} /> : null}
       {/* Course Study's hand-offs sit last: they are what to do *after* reading
           the answer, so they belong below it rather than competing with it. */}
-      <CourseHandoffCards handoffs={courseHandoffs} />
-      <MasteryHandoffCards handoffs={masteryHandoffs} />
+      {courseHandoffs.length > 0 && <CourseHandoffCards handoffs={courseHandoffs} />}
+      {masteryHandoffs.length > 0 && <MasteryHandoffCards handoffs={masteryHandoffs} />}
     </>
   );
 });
@@ -1744,6 +1781,8 @@ export const UserMessage = memo(function UserMessage({
   onPreviewAttachment,
   onCopy,
   onEdit,
+  onDiscardFailedSubmission,
+  onRetryFailedSubmission,
   editDisabled,
   siblingInfo,
   onSwitchBranch,
@@ -1756,7 +1795,9 @@ export const UserMessage = memo(function UserMessage({
   index: number;
   onPreviewAttachment?: (attachment: MessageAttachment) => void;
   onCopy?: CopyHandler;
-  onEdit?: (messageId: number, newContent: string) => void;
+  onEdit?: (messageId: number, newContent: string) => void | boolean | Promise<void | boolean>;
+  onDiscardFailedSubmission?: (messageId: number) => boolean | Promise<boolean>;
+  onRetryFailedSubmission?: (messageId: number) => boolean | Promise<boolean>;
   editDisabled?: boolean;
   siblingInfo?: SiblingInfo;
   onSwitchBranch?: (parentMessageId: number | null, childId: number) => void;
@@ -1773,6 +1814,11 @@ export const UserMessage = memo(function UserMessage({
   const { t } = useTranslation();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(msg.content);
+  const [discarding, setDiscarding] = useState(false);
+  const [discardFailed, setDiscardFailed] = useState(false);
+  const [submittingEdit, setSubmittingEdit] = useState(false);
+  const [editFailed, setEditFailed] = useState(false);
+  const [retrying, setRetrying] = useState(false);
   const { isComposingRef, onCompositionStart, onCompositionEnd } =
     useImeComposing();
   // Connected subagents ride in knowledge_bases (same selection path) but are
@@ -1780,14 +1826,36 @@ export const UserMessage = memo(function UserMessage({
   // reference chip can badge it with the agent's brand icon.
   const agentKinds = useConnectedAgentKinds();
   const consultation = useConsultationReference(msg.requestSnapshot?.config);
-  if (msg.content.startsWith("[Quiz Performance]")) return null;
   // ``msg.id`` can be a negative client-side sentinel for optimistic
   // (just-sent, not yet reconciled with the server) rows. We still allow
   // the Edit button to surface — ``editMessage`` in the context handles
   // the optimistic case by triggering a session reload to resolve the
   // real id before submitting the branch.
+  const [replacementAvailable, setReplacementAvailable] = useState(false);
+  const needsReplacement = Boolean(msg.failedSubmission && onEdit);
+  useEffect(() => {
+    if (!needsReplacement) return;
+    let active = true;
+    void supportsSubmissionReplacement().then(value => {
+      if (active) setReplacementAvailable(value);
+    });
+    return () => { active = false; };
+  }, [needsReplacement]);
+  if (msg.content.startsWith("[Quiz Performance]")) return null;
   const canEdit =
-    Boolean(onEdit) && typeof msg.id === "number" && !editDisabled;
+    Boolean(onEdit) && typeof msg.id === "number" && !editDisabled && (!msg.failedSubmission || replacementAvailable);
+  const discardDraft = async () => {
+    if (!onDiscardFailedSubmission || typeof msg.id !== "number" || editDisabled || discarding) return;
+    setDiscarding(true);
+    setDiscardFailed(false);
+    try {
+      if (!await onDiscardFailedSubmission(msg.id)) setDiscardFailed(true);
+    } catch {
+      setDiscardFailed(true);
+    } finally {
+      setDiscarding(false);
+    }
+  };
   const startEdit = () => {
     if (!canEdit) return;
     setDraft(msg.content);
@@ -1797,15 +1865,24 @@ export const UserMessage = memo(function UserMessage({
     setEditing(false);
     setDraft(msg.content);
   };
-  const submitEdit = () => {
+  const submitEdit = async () => {
+    if (submittingEdit) return;
     const trimmed = draft.trim();
     if (!trimmed || trimmed === msg.content) {
       cancelEdit();
       return;
     }
     if (typeof msg.id !== "number") return;
-    onEdit?.(msg.id, trimmed);
-    setEditing(false);
+    setSubmittingEdit(true);
+    setEditFailed(false);
+    try {
+      if (await onEdit?.(msg.id, trimmed) === false) setEditFailed(true);
+      else setEditing(false);
+    } catch {
+      setEditFailed(true);
+    } finally {
+      setSubmittingEdit(false);
+    }
   };
 
   // Everything this turn carried — file attachments plus the request
@@ -1965,6 +2042,7 @@ export const UserMessage = memo(function UserMessage({
             <textarea
               autoFocus
               value={draft}
+              disabled={submittingEdit}
               onChange={(e) => setDraft(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === "Escape") {
@@ -1991,6 +2069,7 @@ export const UserMessage = memo(function UserMessage({
                 <button
                   type="button"
                   onClick={cancelEdit}
+                  disabled={submittingEdit}
                   className="rounded-md px-2 py-0.5 text-[11px] font-medium text-[var(--muted-foreground)] hover:bg-[var(--muted)]/40"
                 >
                   {t("Cancel")}
@@ -1998,13 +2077,14 @@ export const UserMessage = memo(function UserMessage({
                 <button
                   type="button"
                   onClick={submitEdit}
-                  disabled={!draft.trim() || draft.trim() === msg.content}
+                  disabled={submittingEdit || !draft.trim() || draft.trim() === msg.content}
                   className="rounded-md bg-[var(--primary)] px-2.5 py-0.5 text-[11px] font-medium text-[var(--primary-foreground)] hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   {t("Send")}
                 </button>
               </div>
             </div>
+            {editFailed && <p role="alert" className="text-xs text-[var(--destructive)]">{t("The edit could not be sent. Your draft is still here; please retry.")}</p>}
           </div>
         ) : isVoiceMessage ? (
           // [local patch 2026-09-02] 用户语音消息 = 一条语音横幅（回放原声 + 转写）
@@ -2040,9 +2120,8 @@ export const UserMessage = memo(function UserMessage({
             <div className="whitespace-pre-wrap">{msg.content}</div>
           </div>
         )}
-        {/* Unsent marker (#1594): this text never reached the server, so the
-            bubble must not read as an ordinary sent message. The error and
-            retry live next to the composer, not on an assistant bubble. */}
+        {/* Recovery records are local to this browser. Keep their actions
+            visible so an old pending submission can be resolved in place. */}
         {!editing && msg.failedSubmission ? (
           <div
             data-unsent="true"
@@ -2050,8 +2129,24 @@ export const UserMessage = memo(function UserMessage({
           >
             <AlertCircle className="h-3.5 w-3.5" aria-hidden="true" />
             {t("Not sent")}
+            {onRetryFailedSubmission && !msg.failedSubmissionNeedsReview && typeof msg.id === "number" && (
+              <button type="button" disabled={editDisabled || retrying} onClick={async () => {
+                if (retrying || typeof msg.id !== "number") return;
+                setRetrying(true);
+                try { await onRetryFailedSubmission(msg.id); } finally { setRetrying(false); }
+              }} className="ml-2 rounded-md px-2 py-1 disabled:opacity-40">{t("Retry")}</button>
+            )}
+            {onDiscardFailedSubmission && typeof msg.id === "number" && msg.id < 0 && (
+              <button type="button" onClick={() => void discardDraft()} disabled={editDisabled || discarding}
+                className="ml-2 rounded-md px-2 py-1 text-[var(--muted-foreground)] transition-colors hover:bg-[var(--muted)]/50 disabled:cursor-not-allowed disabled:opacity-40">
+                {discarding ? t("Discarding…") : t("Discard unsent draft")}
+              </button>
+            )}
           </div>
         ) : null}
+        {discardFailed && <p role="alert" className="max-w-full text-right text-xs text-[var(--destructive)]">
+          {t("This draft could not be discarded. Please retry or copy it before leaving.")}
+        </p>}
         {!editing && refTreeItems.length > 0 && (
           <div className="pr-1">
             <ContextReferenceTree
@@ -2136,6 +2231,8 @@ export const ChatMessageList = memo(function ChatMessageList({
   onPreviewAttachment,
   onOpenConsultation,
   onDeleteTurn,
+  onDiscardFailedSubmission,
+  onRetryFailedSubmission,
   selectedBranches,
   onEditMessage,
   onSwitchBranch,
@@ -2168,9 +2265,11 @@ export const ChatMessageList = memo(function ChatMessageList({
   onPreviewAttachment?: (attachment: MessageAttachment) => void;
   onOpenConsultation?: (events: StreamEvent[]) => void;
   onDeleteTurn?: (messageId: number) => void;
+  onDiscardFailedSubmission?: (messageId: number) => boolean | Promise<boolean>;
+  onRetryFailedSubmission?: (messageId: number) => boolean | Promise<boolean>;
   /** Edit-branching: selected sibling at each branch point. */
   selectedBranches?: Record<string, number>;
-  onEditMessage?: (messageId: number, newContent: string) => void;
+  onEditMessage?: (messageId: number, newContent: string) => void | boolean | Promise<void | boolean>;
   onSwitchBranch?: (parentMessageId: number | null, childId: number) => void;
   /**
    * Deliver an ``ask_user`` reply back to the backend so the agentic
@@ -2196,6 +2295,7 @@ export const ChatMessageList = memo(function ChatMessageList({
   onAnswerMasteryQuestion?: (answer: {
     questionId: string;
     text: string;
+    answers?: Array<{ questionId: string; text: string }>;
   }) => void | boolean | Promise<void | boolean>;
   /** Drop a question instead of answering it; also starts a turn. */
   onSkipMasteryQuestion?: (
@@ -2301,6 +2401,10 @@ export const ChatMessageList = memo(function ChatMessageList({
   );
   const masterySkips = useMemo(
     () => collectMasterySkips(visibleMessages),
+    [visibleMessages],
+  );
+  const masteryAnswerRejections = useMemo(
+    () => collectMasteryAnswerRejections(visibleMessages),
     [visibleMessages],
   );
 
@@ -2438,6 +2542,8 @@ export const ChatMessageList = memo(function ChatMessageList({
                 onPreviewAttachment={onPreviewAttachment}
                 onCopy={onCopyAssistantMessage}
                 onEdit={onEditMessage}
+                onDiscardFailedSubmission={onDiscardFailedSubmission}
+                onRetryFailedSubmission={onRetryFailedSubmission}
                 editDisabled={isStreaming}
                 siblingInfo={sib}
                 onSwitchBranch={onSwitchBranch}
@@ -2544,6 +2650,7 @@ export const ChatMessageList = memo(function ChatMessageList({
                 onTraceToggle={handleTraceToggle}
                 masteryGrades={masteryGrades}
                 masterySkips={masterySkips}
+                masteryAnswerRejections={masteryAnswerRejections}
               />
             </InlineFileCardProvider>
             <GeneratedFileCards

@@ -723,6 +723,13 @@ export default memo(function ChatComposer({
 
   const doSend = useCallback(
     (content: string) => {
+      // Keyboard and button submissions share the same admission checks.
+      // A refused submission must leave the draft in the input.
+      if (isStreaming && !awaitingUserReply) return false;
+      if (capabilityNeedsConfig && !capabilityConfigConfirmed) {
+        onRequestConfigConfirm();
+        return false;
+      }
       // [local patch 2026-09-02] voice clip present -> lightweight voice marker
       const voiceClip = attachments.find(
         (a) => (a.filename || "").startsWith("voice-") && (a.mimeType || "").startsWith("audio/"),
@@ -740,8 +747,10 @@ export default memo(function ChatComposer({
       // composer into the conversation layout. Restore it after that update
       // so the user can keep typing, including after switching back to the tab.
       focusTextarea();
+      return true;
     },
-    [attachments, focusTextarea, onSend],
+    [attachments, awaitingUserReply, capabilityConfigConfirmed, capabilityNeedsConfig,
+      focusTextarea, isStreaming, onRequestConfigConfirm, onSend],
   );
   // [local patch 2026-09-02] 桥给录音直发 effect（attachments 落地后自动发）。
   // Ref writes must happen in an effect, never during render.
@@ -958,14 +967,18 @@ export default memo(function ChatComposer({
       ),
     });
   }
-  if (knowledgeBases.length > 0) {
+  if (onToggleKB) {
     resourceItems.push({
       key: "knowledge",
       group: "Reference materials",
       summary: selectedKnowledgeBases.length
         ? `${selectedKnowledgeBases.length} ${t("selected")}`
-        : t("Default"),
-      onClear: () => [...selectedKnowledgeBases].forEach(onToggleKB),
+        : knowledgeBases.length > 0
+          ? t("Default")
+          : t("No KB"),
+      onClear: selectedKnowledgeBases.length
+        ? () => [...selectedKnowledgeBases].forEach(onToggleKB)
+        : undefined,
       label: t("Knowledge"),
       icon: Database,
       count: selectedKnowledgeBases.length,
@@ -1148,7 +1161,7 @@ export default memo(function ChatComposer({
             ref={inputHandleRef}
             textareaRef={textareaRef}
             isVisualizeMode={isVisualizeMode}
-            isStreaming={isStreaming}
+            isStreaming={streamingBlocksSend}
             canSendEmpty={hasReferences}
             onSend={doSend}
             onInputChange={handleInputChange}

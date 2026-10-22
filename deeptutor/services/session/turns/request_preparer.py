@@ -116,6 +116,7 @@ class TurnRequestPreparer:
             turn_id: str,
             question_id: str,
             answer: str,
+            answers: dict[str, str] | None = None,
         ) -> None: ...
 
         async def _acquire_mastery_path_lease(
@@ -235,6 +236,9 @@ class TurnRequestPreparer:
                 else workspace_service.session_binding(session["id"])
             )
             payload["_content_workspace_id"] = binding.workspace_id
+            payload["_workspace_instructions"] = workspace_service.workspace_instructions(
+                binding.workspace_id
+            )
 
         legacy_watching = (
             payload.get("workspace_mode") == "immersive_watching"
@@ -692,6 +696,9 @@ class TurnRequestPreparer:
                         else workspace_service.session_binding(parent_session_id)
                     )
                     payload["_content_workspace_id"] = inherited_binding.workspace_id
+                    payload["_workspace_instructions"] = workspace_service.workspace_instructions(
+                        inherited_binding.workspace_id
+                    )
                 preference_update.update(
                     {
                         "parent_session_id": parent_session_id,
@@ -739,9 +746,19 @@ class TurnRequestPreparer:
                     "reading_material_id": "",
                 }
             )
-        if not payload.get("preserve_session_preferences"):
-            await self.store.update_session_preferences(session["id"], preference_update)
+        lease = None
+        if self.coordinator is not None:
+            turn_id = f"turn_{int(time.time() * 1000)}_{uuid.uuid4().hex[:10]}"
+            lease = await self.coordinator.acquire_turn(
+                turn_id,
+                f"{self._coordination_scope}:{session['id']}",
+                self.owner_id,
+            )
+            if lease is None:
+                raise RuntimeError("Session already has an active or recovering turn")
         try:
+            if not payload.get("preserve_session_preferences"):
+                await self.store.update_session_preferences(session["id"], preference_update)
             submission_kwargs = {}
             if (
                 payload.get("client_submission_id")
@@ -829,6 +846,11 @@ class TurnRequestPreparer:
                         turn_id=turn["id"],
                         question_id=str(card_answer.get("question_id") or ""),
                         answer=str(card_answer.get("text") or ""),
+                        **(
+                            {"answers": card_answer["answers"]}
+                            if card_answer.get("answers") is not None
+                            else {}
+                        ),
                     )
             except Exception as exc:
                 async with self._lock:
