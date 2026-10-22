@@ -30,6 +30,14 @@ async def test_large_native_lines_preserve_both_channels_and_final_fragment():
 
 
 @pytest.mark.asyncio
+@pytest.mark.xfail(
+    reason=(
+        "fork uses the ACP backend (openclaw acp) launched via _spawn_spec(), not "
+        "upstream's gateway _build_command() path; the monkeypatched one-shot command "
+        "is ignored and the ACP session protocol cannot satisfy this gateway contract."
+    ),
+    strict=False,
+)
 async def test_openclaw_receives_large_native_json_answer(monkeypatch):
     answer = "x" * 100000
     script = (
