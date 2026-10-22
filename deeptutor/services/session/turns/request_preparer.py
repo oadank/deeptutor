@@ -618,19 +618,6 @@ class TurnRequestPreparer:
 
             task_links = LinkTasks(workspace_id=current_workspace_id(), task_ids=linked_task_ids)
             await asyncio.to_thread(get_task_board_store().link_tasks, session["id"], task_links)
-        lease = None
-        if self.coordinator is not None:
-            turn_id = f"turn_{int(time.time() * 1000)}_{uuid.uuid4().hex[:10]}"
-            lease = await self.coordinator.acquire_turn(
-                turn_id,
-                f"{self._coordination_scope}:{session['id']}",
-                self.owner_id,
-            )
-            if lease is None:
-                injected = await self._try_inject_into_active_turn(payload, session)
-                if injected is not None:
-                    return injected
-                raise RuntimeError("Session already has an active or recovering turn")
         preference_update: dict[str, Any] = {
             # Auto-routing is a one-turn execution choice; keep the durable
             # preference on what the caller explicitly selected.
