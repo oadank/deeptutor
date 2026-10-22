@@ -258,7 +258,7 @@ export default function AboutSettingsPage() {
       <section className="mb-10 rounded-2xl border border-teal-500/30 bg-teal-500/5 px-5 py-4">
         <h2 className="flex items-center gap-2 font-serif text-[15px] font-semibold text-[var(--foreground)]">
           <GitFork className="h-4 w-4 text-teal-600 dark:text-teal-400" />
-          本机定制版（oadank fork · 基于 v1.6.5）
+          本机定制版（oadank fork · 基于 v1.6.15）
         </h2>
         <ul className="mt-2.5 space-y-1.5 text-[13px] leading-relaxed text-[var(--foreground)]">
           <li>
